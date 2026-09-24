@@ -1,0 +1,16 @@
+{
+  "version": 8,
+  "configurePresets": [
+    {
+      "name": "windows-x64",
+      "generator": "Visual Studio 17 2022",
+      "architecture": "x64",
+      "binaryDir": "${sourceDir}/build_x64",
+      "cacheVariables": {
+        "CMAKE_CXX_STANDARD": "17",
+        "ENABLE_FRONTEND_API": "ON",
+        "ENABLE_QT": "ON"
+      }
+    }
+  ]
+}
