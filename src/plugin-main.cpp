@@ -47,7 +47,7 @@ static void frontend_event(enum obs_frontend_event event, void *private_data)
 
 bool obs_module_load(void)
 {
-    obs_log(LOG_INFO, "[Diretor de Culto] carregando plugin nativo C++/Qt");
+    blog(LOG_INFO, "[Diretor de Culto] carregando plugin nativo C++/Qt");
 
     obs_frontend_add_event_callback(frontend_event, nullptr);
 
@@ -62,7 +62,7 @@ bool obs_module_load(void)
                     "diretor-de-culto-dock",
                     "Diretor de Culto",
                     static_cast<void *>(g_dock.data()))) {
-                obs_log(LOG_WARNING, "[Diretor de Culto] não foi possível criar o dock");
+                blog(LOG_WARNING, "[Diretor de Culto] não foi possível criar o dock");
                 delete g_dock;
                 g_dock = nullptr;
                 return;
@@ -81,7 +81,7 @@ bool obs_module_load(void)
 
 void obs_module_unload(void)
 {
-    obs_log(LOG_INFO, "[Diretor de Culto] descarregando plugin");
+    blog(LOG_INFO, "[Diretor de Culto] descarregando plugin");
 
     obs_frontend_remove_event_callback(frontend_event, nullptr);
 
