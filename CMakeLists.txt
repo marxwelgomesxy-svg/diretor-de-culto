@@ -1,47 +1,58 @@
-cmake_minimum_required(VERSION 3.28...3.30)
+cmake_minimum_required(VERSION 3.20)
+project(diretor-de-culto VERSION 2.0.0 LANGUAGES CXX)
 
-# The OBS Plugin Template bootstrap reads project metadata from buildspec.json
-# and provides the OBS/Qt dependency setup used by GitHub Actions.
-include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/common/bootstrap.cmake" NO_POLICY_SCOPE)
+set(OBS_SOURCE_DIR "" CACHE PATH "OBS Studio 27.2.4 source directory")
+set(OBS_BIN_DIR "" CACHE PATH "OBS Studio 27.2.4 bin/64bit directory")
 
-project(${_name} VERSION ${_version})
+if(NOT OBS_SOURCE_DIR OR NOT OBS_BIN_DIR)
+  message(FATAL_ERROR "OBS_SOURCE_DIR and OBS_BIN_DIR are required")
+endif()
 
-option(ENABLE_FRONTEND_API "Use obs-frontend-api for UI functionality" ON)
-option(ENABLE_QT "Use Qt functionality" ON)
+set(CMAKE_AUTOMOC ON)
+set(CMAKE_AUTOUIC ON)
+set(CMAKE_AUTORCC ON)
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-include(compilerconfig)
-include(defaults)
-include(helpers)
+find_package(Qt5 REQUIRED COMPONENTS Core Widgets)
 
-add_library(${CMAKE_PROJECT_NAME} MODULE)
-
-find_package(libobs REQUIRED)
-find_package(obs-frontend-api REQUIRED)
-find_package(Qt6 COMPONENTS Widgets Core REQUIRED)
-
-target_link_libraries(${CMAKE_PROJECT_NAME}
-    PRIVATE
-        OBS::libobs
-        OBS::obs-frontend-api
-        Qt6::Core
-        Qt6::Widgets
+add_library(diretor-de-culto MODULE
+  src/plugin-main.cpp
+  src/diretor-dock.cpp
+  src/diretor-dock.hpp
 )
 
-set_target_properties(${CMAKE_PROJECT_NAME} PROPERTIES
-    AUTOMOC ON
-    AUTOUIC ON
-    AUTORCC ON
-    CXX_STANDARD 17
-    CXX_STANDARD_REQUIRED ON
+set(OBS_GENERATED_INCLUDE "${CMAKE_BINARY_DIR}/obs-generated")
+file(MAKE_DIRECTORY "${OBS_GENERATED_INCLUDE}")
+if(EXISTS "${OBS_SOURCE_DIR}/libobs/obsconfig.h.in")
+  configure_file("${OBS_SOURCE_DIR}/libobs/obsconfig.h.in" "${OBS_GENERATED_INCLUDE}/obsconfig.h" @ONLY)
+endif()
+
+target_include_directories(diretor-de-culto PRIVATE
+  "${OBS_GENERATED_INCLUDE}"
+  "${OBS_SOURCE_DIR}/libobs"
+  "${OBS_SOURCE_DIR}/UI/obs-frontend-api"
 )
 
-target_sources(${CMAKE_PROJECT_NAME} PRIVATE
-    src/plugin-main.cpp
-    src/diretor-dock.cpp
-    src/diretor-dock.hpp
+target_link_libraries(diretor-de-culto PRIVATE
+  "${OBS_BIN_DIR}/obs.lib"
+  "${OBS_BIN_DIR}/obs-frontend-api.lib"
+  Qt5::Core
+  Qt5::Widgets
 )
 
-set_target_properties_plugin(${CMAKE_PROJECT_NAME}
-    PROPERTIES
-        OUTPUT_NAME ${_name}
+if(MSVC)
+  target_compile_definitions(diretor-de-culto PRIVATE _CRT_SECURE_NO_WARNINGS)
+endif()
+
+set_target_properties(diretor-de-culto PROPERTIES
+  OUTPUT_NAME "diretor-de-culto"
+  PREFIX ""
 )
+
+set(DATA_DIR "${CMAKE_CURRENT_SOURCE_DIR}/data")
+set(INSTALL_PLUGIN_DIR "obs-plugins/64bit")
+set(INSTALL_DATA_DIR "data/obs-plugins/diretor-de-culto")
+
+install(TARGETS diretor-de-culto RUNTIME DESTINATION "${INSTALL_PLUGIN_DIR}")
+install(DIRECTORY "${DATA_DIR}/" DESTINATION "${INSTALL_DATA_DIR}")
