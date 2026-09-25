@@ -19,6 +19,7 @@ jobs:
         run: |
           $root = "$env:RUNNER_TEMP\obs-source"
           git clone --depth 1 --branch 27.2.4 https://github.com/obsproject/obs-studio.git $root
+          if (-not (Test-Path "$root\CMakeLists.txt")) { throw "Fonte do OBS 27.2.4 não foi baixada corretamente." }
           "OBS_SOURCE_DIR=$root" | Out-File -FilePath $env:GITHUB_ENV -Append
 
       - name: Download OBS 27.2.4 Windows runtime
@@ -26,181 +27,75 @@ jobs:
         run: |
           $zip = "$env:RUNNER_TEMP\obs.zip"
           $dest = "$env:RUNNER_TEMP\obs-runtime"
-
-          Invoke-WebRequest `
-            -Uri "https://github.com/obsproject/obs-studio/releases/download/27.2.4/OBS-Studio-27.2.4-Full-x64.zip" `
-            -OutFile $zip
-
+          Invoke-WebRequest -Uri "https://github.com/obsproject/obs-studio/releases/download/27.2.4/OBS-Studio-27.2.4-Full-x64.zip" -OutFile $zip
           New-Item -ItemType Directory -Force -Path $dest | Out-Null
           Expand-Archive -Path $zip -DestinationPath $dest -Force
-
-          $exe = Get-ChildItem $dest -Recurse -Filter obs64.exe |
-            Select-Object -First 1
-
-          if (-not $exe) {
-            throw "obs64.exe não encontrado."
+          $exe = Get-ChildItem $dest -Recurse -Filter obs64.exe | Select-Object -First 1
+          if (-not $exe) { throw "obs64.exe não encontrado no pacote do OBS 27.2.4." }
+          $bin = $exe.Directory.FullName
+          foreach ($required in @("obs.dll", "obs-frontend-api.dll")) {
+            $dll = Join-Path $bin $required
+            if (-not (Test-Path $dll)) { throw "DLL obrigatória não encontrada: $dll" }
           }
-
-          "OBS_BIN_DIR=$($exe.Directory.FullName)" |
-            Out-File -FilePath $env:GITHUB_ENV -Append
+          Write-Host "OBS binário: $bin"
+          "OBS_BIN_DIR=$bin" | Out-File -FilePath $env:GITHUB_ENV -Append
 
       - name: Download Qt5 dependencies
         shell: pwsh
         run: |
           $zip = "$env:RUNNER_TEMP\qt5.zip"
           $dest = "$env:RUNNER_TEMP\qt5"
-
-          Invoke-WebRequest `
-            -Uri "https://github.com/obsproject/obs-deps/releases/download/2022-08-02/windows-deps-qt5-2022-08-02-x64.zip" `
-            -OutFile $zip
-
+          Invoke-WebRequest -Uri "https://github.com/obsproject/obs-deps/releases/download/2022-08-02/windows-deps-qt5-2022-08-02-x64.zip" -OutFile $zip
           New-Item -ItemType Directory -Force -Path $dest | Out-Null
           Expand-Archive -Path $zip -DestinationPath $dest -Force
-
-          $qmake = Get-ChildItem $dest -Recurse -Filter qmake.exe |
-            Select-Object -First 1
-
-          if (-not $qmake) {
-            throw "qmake.exe não encontrado."
-          }
-
+          $qmake = Get-ChildItem $dest -Recurse -Filter qmake.exe | Select-Object -First 1
+          if (-not $qmake) { throw "qmake.exe não encontrado nas dependências Qt5." }
           $qtRoot = $qmake.Directory.Parent.FullName
+          Write-Host "Qt5: $qtRoot"
+          "CMAKE_PREFIX_PATH=$qtRoot" | Out-File -FilePath $env:GITHUB_ENV -Append
 
-          "CMAKE_PREFIX_PATH=$qtRoot" |
-            Out-File -FilePath $env:GITHUB_ENV -Append
-
-            - name: Generate OBS import libraries
+      - name: Locate Visual Studio tools
         shell: pwsh
         run: |
-          $imp = "$env:RUNNER_TEMP\imports"
-
-          New-Item -ItemType Directory -Force -Path $imp | Out-Null
-
           $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
-
-          if (-not (Test-Path $vswhere)) {
-            throw "vswhere.exe não encontrado."
-          }
-
-          $vsPath = & $vswhere `
-            -latest `
-            -products * `
-            -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 `
-            -property installationPath
-
-          if (-not $vsPath) {
-            throw "Visual Studio com ferramentas C++ não encontrado."
-          }
-
-          $dumpbin = Get-ChildItem `
-            "$vsPath\VC\Tools\MSVC" `
-            -Recurse `
-            -Filter dumpbin.exe |
-            Where-Object { $_.FullName -like "*Hostx64*x64*" } |
-            Select-Object -First 1
-
-          $libexe = Get-ChildItem `
-            "$vsPath\VC\Tools\MSVC" `
-            -Recurse `
-            -Filter lib.exe |
-            Where-Object { $_.FullName -like "*Hostx64*x64*" } |
-            Select-Object -First 1
-
-          if (-not $dumpbin) {
-            throw "dumpbin.exe não encontrado."
-          }
-
-          if (-not $libexe) {
-            throw "lib.exe não encontrado."
-          }
-
+          if (-not (Test-Path $vswhere)) { throw "vswhere.exe não encontrado." }
+          $vsPath = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (-not $vsPath) { throw "Visual Studio com ferramentas C++ não encontrado." }
+          $dumpbin = Get-ChildItem "$vsPath\VC\Tools\MSVC" -Recurse -Filter dumpbin.exe | Where-Object { $_.FullName -like "*Hostx64*x64*" } | Select-Object -First 1
+          $libexe = Get-ChildItem "$vsPath\VC\Tools\MSVC" -Recurse -Filter lib.exe | Where-Object { $_.FullName -like "*Hostx64*x64*" } | Select-Object -First 1
+          if (-not $dumpbin) { throw "dumpbin.exe não encontrado." }
+          if (-not $libexe) { throw "lib.exe não encontrado." }
+          Write-Host "Visual Studio: $vsPath"
           Write-Host "dumpbin: $($dumpbin.FullName)"
           Write-Host "lib: $($libexe.FullName)"
+          "DUMPBIN_EXE=$($dumpbin.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "LIB_EXE=$($libexe.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append
 
-          foreach ($name in @("obs", "obs-frontend-api")) {
-
-            $dll = Join-Path $env:OBS_BIN_DIR "$name.dll"
-
-            if (-not (Test-Path $dll)) {
-              throw "DLL não encontrada: $dll"
-            }
-
-            $def = Join-Path $imp "$name.def"
-
-            "LIBRARY $name" | Out-File $def -Encoding ascii
-            "EXPORTS" | Out-File $def -Append -Encoding ascii
-
-            $exports = & $dumpbin.FullName /exports $dll
-
-            foreach ($line in $exports) {
-              if ($line -match '^\s+\d+\s+[0-9A-F]+\s+[0-9A-F]+\s+([^\s]+)\s*$') {
-
-                $symbol = $Matches[1]
-
-                if ($symbol -and $symbol -notmatch '^\?') {
-                  $symbol | Out-File $def -Append -Encoding ascii
-                }
-              }
-            }
-
-            $lib = Join-Path $imp "$name.lib"
-
-            & $libexe.FullName `
-              /nologo `
-              /machine:x64 `
-              "/def:$def" `
-              "/out:$lib"
-
-            if ($LASTEXITCODE -ne 0) {
-              throw "Falha criando $name.lib"
-            }
-          }
-
-          "OBS_IMPORT_DIR=$imp" |
-            Out-File -FilePath $env:GITHUB_ENV -Append
+      - name: Generate OBS import libraries
         shell: pwsh
         run: |
           $imp = "$env:RUNNER_TEMP\imports"
-
           New-Item -ItemType Directory -Force -Path $imp | Out-Null
-
           foreach ($name in @("obs", "obs-frontend-api")) {
-
             $dll = Join-Path $env:OBS_BIN_DIR "$name.dll"
-
-            if (-not (Test-Path $dll)) {
-              throw "DLL não encontrada: $dll"
-            }
-
+            if (-not (Test-Path $dll)) { throw "DLL não encontrada: $dll" }
             $def = Join-Path $imp "$name.def"
-
             "LIBRARY $name" | Out-File $def -Encoding ascii
             "EXPORTS" | Out-File $def -Append -Encoding ascii
-
-            $exports = & dumpbin /exports $dll
-
+            $exports = & "$env:DUMPBIN_EXE" /exports $dll
             foreach ($line in $exports) {
               if ($line -match '^\s+\d+\s+[0-9A-F]+\s+[0-9A-F]+\s+([^\s]+)\s*$') {
-
                 $symbol = $Matches[1]
-
-                if ($symbol -and $symbol -notmatch '^\?') {
-                  $symbol | Out-File $def -Append -Encoding ascii
-                }
+                if ($symbol -and $symbol -notmatch '^\?') { $symbol | Out-File $def -Append -Encoding ascii }
               }
             }
-
             $lib = Join-Path $imp "$name.lib"
-
-            & lib /nologo /machine:x64 /def:$def /out:$lib
-
-            if ($LASTEXITCODE -ne 0) {
-              throw "Falha criando $name.lib"
-            }
+            & "$env:LIB_EXE" /nologo /machine:x64 "/def:$def" "/out:$lib"
+            if ($LASTEXITCODE -ne 0) { throw "Falha criando $name.lib" }
+            if (-not (Test-Path $lib)) { throw "$name.lib não foi gerado." }
+            Write-Host "Gerado: $lib"
           }
-
-          "OBS_IMPORT_DIR=$imp" |
-            Out-File -FilePath $env:GITHUB_ENV -Append
+          "OBS_IMPORT_DIR=$imp" | Out-File -FilePath $env:GITHUB_ENV -Append
 
       - name: Configure CMake
         shell: pwsh
@@ -222,14 +117,13 @@ jobs:
       - name: Package plugin
         shell: pwsh
         run: |
-          cmake --install build `
-            --config RelWithDebInfo `
-            --prefix package
-
-          Compress-Archive `
-            -Path package\* `
-            -DestinationPath "Diretor-de-Culto-OBS27.2.4-Windows-x64.zip" `
-            -Force
+          cmake --install build --config RelWithDebInfo --prefix package
+          if (-not (Test-Path "package\obs-plugins\64bit\diretor-de-culto.dll")) {
+            Write-Host "Conteúdo gerado:"
+            Get-ChildItem package -Recurse | Select-Object FullName
+            throw "diretor-de-culto.dll não foi encontrado no pacote."
+          }
+          Compress-Archive -Path package\* -DestinationPath "Diretor-de-Culto-OBS27.2.4-Windows-x64.zip" -Force
 
       - name: Upload plugin
         uses: actions/upload-artifact@v4
