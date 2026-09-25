@@ -1,70 +1,151 @@
-name: Build Diretor de Culto
+name: Build Diretor de Culto - OBS 27.2.4
 
 on:
-  push:
-    branches: [ main, master ]
   workflow_dispatch:
-
-permissions:
-  contents: read
+  push:
+    branches: [ main ]
 
 jobs:
-  build-windows:
-    name: Build native OBS plugin for Windows x64
+  build:
+    name: Build native plugin for OBS 27.2.4 - Windows x64
     runs-on: windows-2022
 
     steps:
       - name: Checkout plugin
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
-      - name: Checkout official OBS plugin template
-        uses: actions/checkout@v4
-        with:
-          repository: obsproject/obs-plugintemplate
-          path: .obs-plugin-template
-          fetch-depth: 1
-
-      - name: Import official OBS build infrastructure
+      - name: Download OBS 27.2.4 source
         shell: pwsh
         run: |
-          Copy-Item ".obs-plugin-template/cmake" "./cmake" -Recurse -Force
-          Copy-Item ".obs-plugin-template/build-aux" "./build-aux" -Recurse -Force
-          Copy-Item ".obs-plugin-template/CMakePresets.json" "./CMakePresets.json" -Force
+          $root = "$env:RUNNER_TEMP\obs-source"
+          git clone --depth 1 --branch 27.2.4 https://github.com/obsproject/obs-studio.git $root
+          "OBS_SOURCE_DIR=$root" | Out-File -FilePath $env:GITHUB_ENV -Append
 
-          New-Item -ItemType Directory -Force ".github/actions" | Out-Null
-          New-Item -ItemType Directory -Force ".github/scripts" | Out-Null
-
-          Copy-Item ".obs-plugin-template/.github/actions/*" ".github/actions" -Recurse -Force
-          Copy-Item ".obs-plugin-template/.github/scripts/*" ".github/scripts" -Recurse -Force
-
-      - name: Configure
+      - name: Download OBS 27.2.4 Windows runtime
         shell: pwsh
         run: |
-          cmake --preset windows-x64 -DENABLE_FRONTEND_API=ON -DENABLE_QT=ON
+          $zip = "$env:RUNNER_TEMP\obs.zip"
+          $dest = "$env:RUNNER_TEMP\obs-runtime"
 
-      - name: Build
+          Invoke-WebRequest `
+            -Uri "https://github.com/obsproject/obs-studio/releases/download/27.2.4/OBS-Studio-27.2.4-Full-x64.zip" `
+            -OutFile $zip
+
+          New-Item -ItemType Directory -Force -Path $dest | Out-Null
+          Expand-Archive -Path $zip -DestinationPath $dest -Force
+
+          $exe = Get-ChildItem $dest -Recurse -Filter obs64.exe |
+            Select-Object -First 1
+
+          if (-not $exe) {
+            throw "obs64.exe não encontrado."
+          }
+
+          "OBS_BIN_DIR=$($exe.Directory.FullName)" |
+            Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Download Qt5 dependencies
         shell: pwsh
         run: |
-          cmake --build build_x64 --config RelWithDebInfo --parallel
+          $zip = "$env:RUNNER_TEMP\qt5.zip"
+          $dest = "$env:RUNNER_TEMP\qt5"
 
-      - name: Install plugin files
+          Invoke-WebRequest `
+            -Uri "https://github.com/obsproject/obs-deps/releases/download/2022-08-02/windows-deps-qt5-2022-08-02-x64.zip" `
+            -OutFile $zip
+
+          New-Item -ItemType Directory -Force -Path $dest | Out-Null
+          Expand-Archive -Path $zip -DestinationPath $dest -Force
+
+          $qmake = Get-ChildItem $dest -Recurse -Filter qmake.exe |
+            Select-Object -First 1
+
+          if (-not $qmake) {
+            throw "qmake.exe não encontrado."
+          }
+
+          $qtRoot = $qmake.Directory.Parent.FullName
+
+          "CMAKE_PREFIX_PATH=$qtRoot" |
+            Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Generate OBS import libraries
         shell: pwsh
         run: |
-          Remove-Item "package" -Recurse -Force -ErrorAction SilentlyContinue
-          cmake --install build_x64 --config RelWithDebInfo --prefix package
+          $imp = "$env:RUNNER_TEMP\imports"
 
-      - name: Create download ZIP
+          New-Item -ItemType Directory -Force -Path $imp | Out-Null
+
+          foreach ($name in @("obs", "obs-frontend-api")) {
+
+            $dll = Join-Path $env:OBS_BIN_DIR "$name.dll"
+
+            if (-not (Test-Path $dll)) {
+              throw "DLL não encontrada: $dll"
+            }
+
+            $def = Join-Path $imp "$name.def"
+
+            "LIBRARY $name" | Out-File $def -Encoding ascii
+            "EXPORTS" | Out-File $def -Append -Encoding ascii
+
+            $exports = & dumpbin /exports $dll
+
+            foreach ($line in $exports) {
+              if ($line -match '^\s+\d+\s+[0-9A-F]+\s+[0-9A-F]+\s+([^\s]+)\s*$') {
+
+                $symbol = $Matches[1]
+
+                if ($symbol -and $symbol -notmatch '^\?') {
+                  $symbol | Out-File $def -Append -Encoding ascii
+                }
+              }
+            }
+
+            $lib = Join-Path $imp "$name.lib"
+
+            & lib /nologo /machine:x64 /def:$def /out:$lib
+
+            if ($LASTEXITCODE -ne 0) {
+              throw "Falha criando $name.lib"
+            }
+          }
+
+          "OBS_IMPORT_DIR=$imp" |
+            Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Configure CMake
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force "artifact" | Out-Null
-          Copy-Item "package/RelWithDebInfo/*" "artifact" -Recurse -Force
-          Compress-Archive -Path "artifact/*" -DestinationPath "Diretor-de-Culto-2.0.0-alpha-Windows-x64.zip" -Force
+          cmake -S . -B build `
+            -G "Visual Studio 17 2022" `
+            -A x64 `
+            -DCMAKE_PREFIX_PATH="$env:CMAKE_PREFIX_PATH" `
+            -DOBS_SOURCE_DIR="$env:OBS_SOURCE_DIR" `
+            -DOBS_BIN_DIR="$env:OBS_IMPORT_DIR"
 
-      - name: Upload plugin artifact
+      - name: Build plugin
+        shell: pwsh
+        run: |
+          cmake --build build `
+            --config RelWithDebInfo `
+            --parallel
+
+      - name: Package plugin
+        shell: pwsh
+        run: |
+          cmake --install build `
+            --config RelWithDebInfo `
+            --prefix package
+
+          Compress-Archive `
+            -Path package\* `
+            -DestinationPath "Diretor-de-Culto-OBS27.2.4-Windows-x64.zip" `
+            -Force
+
+      - name: Upload plugin
         uses: actions/upload-artifact@v4
         with:
-          name: Diretor-de-Culto-2.0.0-alpha-Windows-x64
-          path: Diretor-de-Culto-2.0.0-alpha-Windows-x64.zip
+          name: Diretor-de-Culto-OBS27.2.4-Windows-x64
+          path: Diretor-de-Culto-OBS27.2.4-Windows-x64.zip
           if-no-files-found: error
