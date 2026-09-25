@@ -69,7 +69,95 @@ jobs:
           "CMAKE_PREFIX_PATH=$qtRoot" |
             Out-File -FilePath $env:GITHUB_ENV -Append
 
-      - name: Generate OBS import libraries
+            - name: Generate OBS import libraries
+        shell: pwsh
+        run: |
+          $imp = "$env:RUNNER_TEMP\imports"
+
+          New-Item -ItemType Directory -Force -Path $imp | Out-Null
+
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+
+          if (-not (Test-Path $vswhere)) {
+            throw "vswhere.exe não encontrado."
+          }
+
+          $vsPath = & $vswhere `
+            -latest `
+            -products * `
+            -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 `
+            -property installationPath
+
+          if (-not $vsPath) {
+            throw "Visual Studio com ferramentas C++ não encontrado."
+          }
+
+          $dumpbin = Get-ChildItem `
+            "$vsPath\VC\Tools\MSVC" `
+            -Recurse `
+            -Filter dumpbin.exe |
+            Where-Object { $_.FullName -like "*Hostx64*x64*" } |
+            Select-Object -First 1
+
+          $libexe = Get-ChildItem `
+            "$vsPath\VC\Tools\MSVC" `
+            -Recurse `
+            -Filter lib.exe |
+            Where-Object { $_.FullName -like "*Hostx64*x64*" } |
+            Select-Object -First 1
+
+          if (-not $dumpbin) {
+            throw "dumpbin.exe não encontrado."
+          }
+
+          if (-not $libexe) {
+            throw "lib.exe não encontrado."
+          }
+
+          Write-Host "dumpbin: $($dumpbin.FullName)"
+          Write-Host "lib: $($libexe.FullName)"
+
+          foreach ($name in @("obs", "obs-frontend-api")) {
+
+            $dll = Join-Path $env:OBS_BIN_DIR "$name.dll"
+
+            if (-not (Test-Path $dll)) {
+              throw "DLL não encontrada: $dll"
+            }
+
+            $def = Join-Path $imp "$name.def"
+
+            "LIBRARY $name" | Out-File $def -Encoding ascii
+            "EXPORTS" | Out-File $def -Append -Encoding ascii
+
+            $exports = & $dumpbin.FullName /exports $dll
+
+            foreach ($line in $exports) {
+              if ($line -match '^\s+\d+\s+[0-9A-F]+\s+[0-9A-F]+\s+([^\s]+)\s*$') {
+
+                $symbol = $Matches[1]
+
+                if ($symbol -and $symbol -notmatch '^\?') {
+                  $symbol | Out-File $def -Append -Encoding ascii
+                }
+              }
+            }
+
+            $lib = Join-Path $imp "$name.lib"
+
+            & $libexe.FullName `
+              /nologo `
+              /machine:x64 `
+              "/def:$def" `
+              "/out:$lib"
+
+            if ($LASTEXITCODE -ne 0) {
+              throw "Falha criando $name.lib"
+            }
+          }
+
+          "OBS_IMPORT_DIR=$imp" |
+            Out-File -FilePath $env:GITHUB_ENV -Append
         shell: pwsh
         run: |
           $imp = "$env:RUNNER_TEMP\imports"
