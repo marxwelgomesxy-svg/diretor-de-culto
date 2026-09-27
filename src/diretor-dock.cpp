@@ -784,7 +784,15 @@ void DiretorDock::requestGeminiTest()
         return;
 
     QJsonObject body;
-    body.insert(QStringLiteral("contents"), QJsonArray{QJsonObject{{QStringLiteral("parts"), QJsonArray{QJsonObject{{QStringLiteral("text"), QStringLiteral("Responda somente OK para confirmar que a API Gemini está acessível.")}}}}}}});
+    QJsonObject testTextPart;
+    testTextPart.insert(QStringLiteral("text"), QStringLiteral("Responda somente OK para confirmar que a API Gemini está acessível."));
+    QJsonArray testParts;
+    testParts.append(testTextPart);
+    QJsonObject testContent;
+    testContent.insert(QStringLiteral("parts"), testParts);
+    QJsonArray testContents;
+    testContents.append(testContent);
+    body.insert(QStringLiteral("contents"), testContents);
     QJsonObject generation;
     generation.insert(QStringLiteral("temperature"), 0.0);
     generation.insert(QStringLiteral("maxOutputTokens"), 8);
