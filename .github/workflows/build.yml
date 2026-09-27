@@ -14,215 +14,84 @@ jobs:
       - name: Checkout plugin
         uses: actions/checkout@v4
 
-      - name: Download OBS Studio 27.2.4 source
+      - name: Download OBS 27.2.4 source
         shell: pwsh
         run: |
-          if (Test-Path "$env:GITHUB_WORKSPACE\obs-source") {
-            Remove-Item "$env:GITHUB_WORKSPACE\obs-source" -Recurse -Force
-          }
+          $root = "$env:RUNNER_TEMP\obs-source"
+          git clone --depth 1 --branch 27.2.4 https://github.com/obsproject/obs-studio.git $root
+          if (-not (Test-Path "$root\CMakeLists.txt")) { throw "Fonte do OBS 27.2.4 não foi baixada corretamente." }
+          "OBS_SOURCE_DIR=$root" | Out-File -FilePath $env:GITHUB_ENV -Append
 
-          git clone --depth 1 --branch 27.2.4 `
-            https://github.com/obsproject/obs-studio.git `
-            "$env:GITHUB_WORKSPACE\obs-source"
-
-          if (-not (Test-Path "$env:GITHUB_WORKSPACE\obs-source\CMakeLists.txt")) {
-            throw "Código-fonte do OBS 27.2.4 não foi baixado corretamente."
-          }
-
-      - name: Download OBS Studio 27.2.4 runtime
+      - name: Download OBS 27.2.4 Windows runtime
         shell: pwsh
         run: |
-          $zip = "$env:RUNNER_TEMP\obs-runtime.zip"
-          $extract = "$env:RUNNER_TEMP\obs-runtime"
+          $zip = "$env:RUNNER_TEMP\obs.zip"
+          $dest = "$env:RUNNER_TEMP\obs-runtime"
+
+          if (Test-Path $dest) { Remove-Item $dest -Recurse -Force }
+          New-Item -ItemType Directory -Force -Path $dest | Out-Null
 
           Invoke-WebRequest `
             -Uri "https://github.com/obsproject/obs-studio/releases/download/27.2.4/OBS-Studio-27.2.4-Full-x64.zip" `
             -OutFile $zip
 
-          if (-not (Test-Path $zip)) {
-            throw "Download do OBS 27.2.4 falhou."
-          }
+          Expand-Archive -Path $zip -DestinationPath $dest -Force
 
-          if (Test-Path $extract) {
-            Remove-Item $extract -Recurse -Force
-          }
+          $obsDll = Get-ChildItem $dest -Recurse -Filter obs.dll | Select-Object -First 1
+          if (-not $obsDll) { throw "obs.dll não encontrado no runtime do OBS 27.2.4." }
 
-          New-Item -ItemType Directory -Force -Path $extract | Out-Null
-
-          Expand-Archive -Path $zip -DestinationPath $extract -Force
-
-          $obsDll = Get-ChildItem `
-            -Path $extract `
-            -Filter "obs.dll" `
-            -File `
-            -Recurse `
-            -ErrorAction SilentlyContinue |
-            Where-Object { $_.FullName -match "\\bin\\64bit\\obs\.dll$" } |
-            Select-Object -First 1
-
-          if (-not $obsDll) {
-            $obsDll = Get-ChildItem `
-              -Path $extract `
-              -Filter "obs.dll" `
-              -File `
-              -Recurse `
-              -ErrorAction SilentlyContinue |
-              Select-Object -First 1
-          }
-
-          if (-not $obsDll) {
-            Write-Host "Estrutura extraída:"
-            Get-ChildItem $extract -Recurse -Depth 6 | Select-Object FullName
-            throw "obs.dll não encontrado no pacote OBS 27.2.4."
-          }
-
-          $obsRuntimeDir = $obsDll.Directory.FullName
-          $frontendDll = Join-Path $obsRuntimeDir "obs-frontend-api.dll"
+          $runtimeDir = $obsDll.Directory.FullName
+          $frontendDll = Join-Path $runtimeDir "obs-frontend-api.dll"
 
           if (-not (Test-Path $frontendDll)) {
-            $frontendDll = Get-ChildItem `
-              -Path $extract `
-              -Filter "obs-frontend-api.dll" `
-              -File `
-              -Recurse `
-              -ErrorAction SilentlyContinue |
-              Where-Object { $_.FullName -match "\\bin\\64bit\\obs-frontend-api\.dll$" } |
-              Select-Object -First 1
+            throw "obs-frontend-api.dll não encontrado em: $runtimeDir"
           }
 
-          if (-not $frontendDll) {
-            throw "obs-frontend-api.dll não encontrado no runtime do OBS 27.2.4."
-          }
+          Write-Host "OBS_RUNTIME_DIR: $runtimeDir"
+          Write-Host "obs.dll: $obsDll"
+          Write-Host "obs-frontend-api.dll: $frontendDll"
 
-          if ($frontendDll -is [System.IO.FileInfo]) {
-            $frontendDllPath = $frontendDll.FullName
-          } else {
-            $frontendDllPath = $frontendDll
-          }
+          "OBS_RUNTIME_DIR=$runtimeDir" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
-          Write-Host "obs.dll: $($obsDll.FullName)"
-          Write-Host "obs-frontend-api.dll: $frontendDllPath"
-          Write-Host "OBS_RUNTIME_DIR: $obsRuntimeDir"
-
-          "OBS_RUNTIME_DIR=$obsRuntimeDir" |
-            Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-
-      - name: Download OBS 27.2.4 Qt5 dependencies
+      - name: Download Qt5 dependencies
         shell: pwsh
         run: |
-          $qtZip = "$env:RUNNER_TEMP\obs-deps-qt5.zip"
-          $qtExtract = "$env:RUNNER_TEMP\obs-deps-qt5"
-
-          Invoke-WebRequest `
-            -Uri "https://github.com/obsproject/obs-deps/releases/download/2022-08-02/windows-deps-qt5-2022-08-02-x64.zip" `
-            -OutFile $qtZip
-
-          if (-not (Test-Path $qtZip)) {
-            throw "Download do pacote Qt5 falhou."
-          }
-
-          if (Test-Path $qtExtract) {
-            Remove-Item $qtExtract -Recurse -Force
-          }
-
-          New-Item -ItemType Directory -Force -Path $qtExtract | Out-Null
-
-          Expand-Archive -Path $qtZip -DestinationPath $qtExtract -Force
-
-          $qtConfig = Get-ChildItem `
-            -Path $qtExtract `
-            -Filter "Qt5Config.cmake" `
-            -File `
-            -Recurse `
-            -ErrorAction SilentlyContinue |
-            Select-Object -First 1
-
-          if (-not $qtConfig) {
-            Write-Host "Qt5Config.cmake não encontrado."
-            Get-ChildItem $qtExtract -Recurse -Depth 6 | Select-Object FullName
-            throw "Qt5Config.cmake não foi localizado no pacote Qt5."
-          }
-
-          $qtCmakeDir = $qtConfig.Directory.FullName
-
-          $qtPrefixCandidates = @(
-            (Split-Path (Split-Path (Split-Path $qtCmakeDir -Parent) -Parent) -Parent),
-            (Split-Path (Split-Path $qtCmakeDir -Parent) -Parent),
-            (Split-Path $qtCmakeDir -Parent)
-          )
-
-          $qtPrefix = $null
-
-          foreach ($candidate in $qtPrefixCandidates) {
-            if ($candidate -and
-                (Test-Path (Join-Path $candidate "lib")) -and
-                (Test-Path (Join-Path $candidate "include"))) {
-              $qtPrefix = $candidate
-              break
-            }
-          }
-
-          if (-not $qtPrefix) {
-            $qtPrefix = Split-Path $qtCmakeDir -Parent
-          }
-
-          Write-Host "Qt5Config.cmake: $($qtConfig.FullName)"
-          Write-Host "QT_PREFIX: $qtPrefix"
-
-          "QT_PREFIX=$qtPrefix" |
-            Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          $zip = "$env:RUNNER_TEMP\qt5.zip"
+          $dest = "$env:RUNNER_TEMP\qt5"
+          Invoke-WebRequest -Uri "https://github.com/obsproject/obs-deps/releases/download/2022-08-02/windows-deps-qt5-2022-08-02-x64.zip" -OutFile $zip
+          New-Item -ItemType Directory -Force -Path $dest | Out-Null
+          Expand-Archive -Path $zip -DestinationPath $dest -Force
+          $qmake = Get-ChildItem $dest -Recurse -Filter qmake.exe | Select-Object -First 1
+          if (-not $qmake) { throw "qmake.exe não encontrado nas dependências Qt5." }
+          $qtRoot = $qmake.Directory.Parent.FullName
+          Write-Host "Qt5: $qtRoot"
+          "CMAKE_PREFIX_PATH=$qtRoot" | Out-File -FilePath $env:GITHUB_ENV -Append
 
       - name: Locate Visual Studio x64 tools
         shell: pwsh
         run: |
           $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          if (-not (Test-Path $vswhere)) { throw "vswhere.exe não encontrado." }
 
-          if (-not (Test-Path $vswhere)) {
-            throw "vswhere.exe não encontrado."
-          }
+          $vsPath = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (-not $vsPath) { throw "Visual Studio com ferramentas C++ não encontrado." }
 
-          $vsPath = & $vswhere `
-            -latest `
-            -products * `
-            -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 `
-            -property installationPath
+          $msvcRoot = Get-ChildItem "$vsPath\VC\Tools\MSVC" -Directory | Sort-Object Name -Descending | Select-Object -First 1
+          if (-not $msvcRoot) { throw "MSVC não encontrado." }
 
-          if (-not $vsPath) {
-            throw "Visual Studio com ferramentas C++ não encontrado."
-          }
+          $x64Tools = Join-Path $msvcRoot.FullName "bin\HostX64\x64"
+          $dumpbin = Join-Path $x64Tools "dumpbin.exe"
+          $libexe = Join-Path $x64Tools "lib.exe"
 
-          $dumpbin = Get-ChildItem `
-            "$vsPath\VC\Tools\MSVC" `
-            -Filter "dumpbin.exe" `
-            -Recurse `
-            -ErrorAction SilentlyContinue |
-            Where-Object { $_.FullName -match "\\HostX64\\x64\\dumpbin\.exe$" } |
-            Select-Object -First 1
+          if (-not (Test-Path $dumpbin)) { throw "dumpbin x64 não encontrado: $dumpbin" }
+          if (-not (Test-Path $libexe)) { throw "lib.exe x64 não encontrado: $libexe" }
 
-          $libexe = Get-ChildItem `
-            "$vsPath\VC\Tools\MSVC" `
-            -Filter "lib.exe" `
-            -Recurse `
-            -ErrorAction SilentlyContinue |
-            Where-Object { $_.FullName -match "\\HostX64\\x64\\lib\.exe$" } |
-            Select-Object -First 1
+          Write-Host "Visual Studio: $vsPath"
+          Write-Host "DUMPBIN: $dumpbin"
+          Write-Host "LIBEXE: $libexe"
 
-          if (-not $dumpbin) {
-            throw "dumpbin.exe x64 não encontrado."
-          }
-
-          if (-not $libexe) {
-            throw "lib.exe x64 não encontrado."
-          }
-
-          Write-Host "dumpbin: $($dumpbin.FullName)"
-          Write-Host "lib.exe : $($libexe.FullName)"
-
-          "DUMPBIN=$($dumpbin.FullName)" |
-            Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-
-          "LIBEXE=$($libexe.FullName)" |
-            Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "DUMPBIN=$dumpbin" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "LIBEXE=$libexe" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
       - name: Generate OBS import libraries
         shell: pwsh
@@ -233,338 +102,23 @@ jobs:
             Remove-Item $obsBin -Recurse -Force
           }
 
-          New-Item `
-            -ItemType Directory `
-            -Force `
-            -Path $obsBin | Out-Null
+          New-Item -ItemType Directory -Force -Path $obsBin | Out-Null
 
           $obsDll = Join-Path $env:OBS_RUNTIME_DIR "obs.dll"
           $frontendDll = Join-Path $env:OBS_RUNTIME_DIR "obs-frontend-api.dll"
 
-          if (-not (Test-Path $obsDll)) {
-            throw "obs.dll não encontrado em: $obsDll"
-          }
-
-          if (-not (Test-Path $frontendDll)) {
-            throw "obs-frontend-api.dll não encontrado em: $frontendDll"
-          }
-
-          Write-Host "=========================================="
-          Write-Host "DLLs ENCONTRADAS"
-          Write-Host "=========================================="
-          Write-Host "obs.dll:"
-          Write-Host $obsDll
-          Write-Host ""
-          Write-Host "obs-frontend-api.dll:"
-          Write-Host $frontendDll
+          if (-not (Test-Path $obsDll)) { throw "obs.dll não encontrado em: $obsDll" }
+          if (-not (Test-Path $frontendDll)) { throw "obs-frontend-api.dll não encontrado em: $frontendDll" }
 
           function Get-ExportNames {
-            param(
-              [string]$DllPath
-            )
+            param([string]$DllPath)
 
             Write-Host ""
             Write-Host "=========================================="
             Write-Host "DUMPBIN: $DllPath"
             Write-Host "=========================================="
 
-            $output = & $env:DUMPBIN /exports $DllPath 2>&1
-
-            $exitCode = $LASTEXITCODE
-
-            Write-Host ($output | Out-String)
-
-            if ($exitCode -ne 0) {
-              throw "dumpbin falhou para $DllPath com código $exitCode."
-            }
-
-            $exports = New-Object System.Collections.Generic.List[string]
-
-            foreach ($line in $output) {
-
-              # Formato normal do dumpbin:
-              #
-              # ordinal hint RVA      name
-              #       1    0 00011000  nome_da_funcao
-              #
-              # Também aceitamos linhas com pequenas diferenças de espaçamento.
-
-              if ($line -match '^\s*\d+\s+[0-9A-Fa-f]+\s+[0-9A-Fa-f]+\s+(.+?)\s*$') {
-
-                $name = $matches[1].Trim()
-
-                if ($name -and
-                    $name -notmatch '^__IMPORT_DESCRIPTOR' -and
-                    $name -notmatch '^__NULL_IMPORT_DESCRIPTOR' -and
-                    $name -notmatch '^NULL_THUNK_DATA') {
-
-                  $exports.Add($name)
-                }
-              }
-            }
-
-            # Se o formato acima não encontrou nada,
-            # tentamos interpretar a saída procurando a coluna "name".
-
-            if ($exports.Count -eq 0) {
-
-              Write-Host ""
-              Write-Host "Parser principal não encontrou exports."
-              Write-Host "Tentando parser alternativo..."
-
-              $started = $false
-
-              foreach ($line in $output) {
-
-                if ($line -match '^\s*ordinal\s+hint\s+RVA\s+name') {
-                  $started = $true
-                  continue
-                }
-
-                if (-not $started) {
-                  continue
-                }
-
-                if ([string]::IsNullOrWhiteSpace($line)) {
-                  continue
-                }
-
-                if ($line -match '^\s*-+\s*$') {
-                  continue
-                }
-
-                $parts = $line.Trim() -split '\s+'
-
-                if ($parts.Count -ge 4) {
-
-                  $first = $parts[0]
-                  $second = $parts[1]
-                  $third = $parts[2]
-
-                  if ($first -match '^\d+$' -and
-                      $second -match '^[0-9A-Fa-f]+$' -and
-                      $third -match '^[0-9A-Fa-f]+$') {
-
-                    $name = ($parts[3..($parts.Count - 1)] -join ' ').Trim()
-
-                    if ($name) {
-                      $exports.Add($name)
-                    }
-                  }
-                }
-              }
-            }
-
-            # Remover duplicados.
-            $exports = $exports |
-              Sort-Object -Unique
-
-            if (-not $exports -or $exports.Count -eq 0) {
-
-              Write-Host ""
-              Write-Host "=========================================="
-              Write-Host "ERRO: NENHUM EXPORT ENCONTRADO"
-              Write-Host "=========================================="
-
-              Write-Host ""
-              Write-Host "Saída completa do dumpbin:"
-              Write-Host ($output | Out-String)
-
-              throw "Nenhuma exportação encontrada para $DllPath."
-            }
-
-            Write-Host ""
-            Write-Host "Exports encontrados: $($exports.Count)"
-
-            $exports |
-              Select-Object -First 20 |
-              ForEach-Object {
-                Write-Host "  $_"
-              }
-
-            if ($exports.Count -gt 20) {
-              Write-Host "  ... e mais $($exports.Count - 20)"
-            }
-
-            return $exports
-          }
-
-          function Create-DefFile {
-            param(
-              [string]$DllName,
-              [string]$OutputFile,
-              [object[]]$Exports
-            )
-
-            Write-Host ""
-            Write-Host "Criando:"
-            Write-Host $OutputFile
-
-            $content = New-Object System.Collections.Generic.List[string]
-
-            $content.Add("LIBRARY `"$DllName`"")
-            $content.Add("EXPORTS")
-
-            foreach ($name in $Exports) {
-              $content.Add("    $name")
-            }
-
-            Set-Content `
-              -Path $OutputFile `
-              -Value $content `
-              -Encoding ascii
-
-            if (-not (Test-Path $OutputFile)) {
-              throw "Não foi possível criar $OutputFile."
-            }
-          }
-
-          # ==========================================
-          # OBS CORE
-          # ==========================================
-
-          $obsExports = Get-ExportNames $obsDll
-
-          $obsDef = Join-Path $obsBin "obs.def"
-
-          Create-DefFile `
-            -DllName "obs.dll" `
-            -OutputFile $obsDef `
-            -Exports $obsExports
-
-          # ==========================================
-          # OBS FRONTEND API
-          # ==========================================
-
-          $frontendExports = Get-ExportNames $frontendDll
-
-          $frontendDef = Join-Path $obsBin "obs-frontend-api.def"
-
-          Create-DefFile `
-            -DllName "obs-frontend-api.dll" `
-            -OutputFile $frontendDef `
-            -Exports $frontendExports
-
-          # ==========================================
-          # GERAR LIBRARIES
-          # ==========================================
-
-          $obsLib = Join-Path $obsBin "obs.lib"
-          $frontendLib = Join-Path $obsBin "obs-frontend-api.lib"
-
-          Write-Host ""
-          Write-Host "=========================================="
-          Write-Host "GERANDO obs.lib"
-          Write-Host "=========================================="
-
-          & $env:LIBEXE `
-            /DEF:"$obsDef" `
-            /MACHINE:X64 `
-            /OUT:"$obsLib"
-
-          if ($LASTEXITCODE -ne 0) {
-            throw "Falha ao gerar obs.lib."
-          }
-
-          Write-Host ""
-          Write-Host "=========================================="
-          Write-Host "GERANDO obs-frontend-api.lib"
-          Write-Host "=========================================="
-
-          & $env:LIBEXE `
-            /DEF:"$frontendDef" `
-            /MACHINE:X64 `
-            /OUT:"$frontendLib"
-
-          if ($LASTEXITCODE -ne 0) {
-            throw "Falha ao gerar obs-frontend-api.lib."
-          }
-
-          Write-Host ""
-          Write-Host "=========================================="
-          Write-Host "VERIFICANDO IMPORT LIBRARIES"
-          Write-Host "=========================================="
-
-          Get-ChildItem $obsBin |
-            Select-Object Name, Length, FullName
-
-          if (-not (Test-Path $obsLib)) {
-            throw "obs.lib não foi criada."
-          }
-
-          if (-not (Test-Path $frontendLib)) {
-            throw "obs-frontend-api.lib não foi criada."
-          }
-
-          Write-Host ""
-          Write-Host "OBS LIB:"
-          Write-Host $obsLib
-
-          Write-Host ""
-          Write-Host "FRONTEND LIB:"
-          Write-Host $frontendLib
-
-          "OBS_IMPORT_DIR=$obsBin" |
-            Out-File `
-              -FilePath $env:GITHUB_ENV `
-              -Append `
-              -Encoding utf8
-
-          Write-Host ""
-          Write-Host "=========================================="
-          Write-Host "IMPORT LIBRARIES GERADAS COM SUCESSO"
-          Write-Host "=========================================="
-
-          if ($LASTEXITCODE -ne 0) {
-      - name: Generate OBS import libraries
-        shell: pwsh
-        run: |
-          $obsBin = Join-Path $env:RUNNER_TEMP "obs-import-libs"
-
-          if (Test-Path $obsBin) {
-            Remove-Item $obsBin -Recurse -Force
-          }
-
-          New-Item `
-            -ItemType Directory `
-            -Force `
-            -Path $obsBin | Out-Null
-
-          $obsDll = Join-Path $env:OBS_RUNTIME_DIR "obs.dll"
-          $frontendDll = Join-Path $env:OBS_RUNTIME_DIR "obs-frontend-api.dll"
-
-          if (-not (Test-Path $obsDll)) {
-            throw "obs.dll não encontrado em: $obsDll"
-          }
-
-          if (-not (Test-Path $frontendDll)) {
-            throw "obs-frontend-api.dll não encontrado em: $frontendDll"
-          }
-
-          Write-Host ""
-          Write-Host "=========================================="
-          Write-Host "DLLs ENCONTRADAS"
-          Write-Host "=========================================="
-          Write-Host "obs.dll:"
-          Write-Host $obsDll
-          Write-Host ""
-          Write-Host "obs-frontend-api.dll:"
-          Write-Host $frontendDll
-
-          function Get-ExportNames {
-            param(
-              [string]$DllPath
-            )
-
-            Write-Host ""
-            Write-Host "=========================================="
-            Write-Host "DUMPBIN: $DllPath"
-            Write-Host "=========================================="
-
-            # Captura toda a saída como texto puro.
-            $rawOutput = & $env:DUMPBIN /exports "$DllPath" 2>&1 |
-              Out-String
-
+            $rawOutput = & $env:DUMPBIN /exports "$DllPath" 2>&1 | Out-String
             $exitCode = $LASTEXITCODE
 
             if ($exitCode -ne 0) {
@@ -574,181 +128,69 @@ jobs:
 
             Write-Host $rawOutput
 
-            # Divide novamente em linhas reais.
             $lines = $rawOutput -split "`r?`n"
-
             $exports = New-Object System.Collections.Generic.List[string]
-
             $started = $false
 
             foreach ($line in $lines) {
-
               $trimmed = $line.Trim()
 
-              # Detecta o cabeçalho da tabela.
               if ($trimmed -match '^ordinal\s+hint\s+RVA\s+name') {
                 $started = $true
                 continue
               }
 
-              if (-not $started) {
-                continue
-              }
+              if (-not $started -or [string]::IsNullOrWhiteSpace($trimmed)) { continue }
+              if ($trimmed -match '^-+$') { continue }
 
-              if ([string]::IsNullOrWhiteSpace($trimmed)) {
-                continue
-              }
-
-              # Ignora separadores.
-              if ($trimmed -match '^-+$') {
-                continue
-              }
-
-              # Formato real do dumpbin:
-              #
-              # 1    0    00021830    array_output_serializer_free =
-              #
-              # Pegamos os três primeiros campos e todo o restante como nome.
               if ($trimmed -match '^\d+\s+[0-9A-Fa-f]+\s+[0-9A-Fa-f]+\s+(.+?)\s*$') {
-
                 $name = $matches[1].Trim()
 
-                if ($name) {
+                if ($name -match '^([^\s=]+)\s*=\s*(.+)$') {
+                  $name = $matches[1].Trim()
+                }
 
-                  # Remove alias do dumpbin:
-                  #
-                  # funcao = funcao
-                  #
-                  # ou
-                  #
-                  # funcao = outra_funcao
-                  #
-                  if ($name -match '^([^\s=]+)\s*=\s*(.+)$') {
-                    $name = $matches[1].Trim()
-                  }
-
-                  if ($name -and
-                      $name -notmatch '^__IMPORT_DESCRIPTOR' -and
-                      $name -notmatch '^__NULL_IMPORT_DESCRIPTOR' -and
-                      $name -notmatch '^NULL_THUNK_DATA') {
-
-                    $exports.Add($name)
-                  }
+                if ($name -and $name -notmatch '^__IMPORT_DESCRIPTOR' -and $name -notmatch '^__NULL_IMPORT_DESCRIPTOR' -and $name -notmatch '^NULL_THUNK_DATA') {
+                  $exports.Add($name)
                 }
               }
             }
 
-            $exports = @(
-              $exports |
-                Where-Object {
-                  -not [string]::IsNullOrWhiteSpace($_)
-                } |
-                Sort-Object -Unique
-            )
+            $exports = @($exports | Where-Object { $_ } | Sort-Object -Unique)
 
             Write-Host ""
-            Write-Host "=========================================="
-            Write-Host "EXPORTS ENCONTRADOS"
-            Write-Host "=========================================="
-            Write-Host "Quantidade: $($exports.Count)"
+            Write-Host "EXPORTS ENCONTRADOS: $($exports.Count)"
 
             if ($exports.Count -eq 0) {
-              Write-Host ""
-              Write-Host "ERRO: o parser não encontrou exports."
-              Write-Host ""
-              Write-Host "Cabeçalho encontrado:"
-              Write-Host "ordinal hint RVA name"
-              Write-Host ""
-              Write-Host "Primeiras linhas da tabela:"
-
-              $lines |
-                Where-Object {
-                  $_ -match '^\s*\d+\s+[0-9A-Fa-f]+\s+[0-9A-Fa-f]+\s+'
-                } |
-                Select-Object -First 20 |
-                ForEach-Object {
-                  Write-Host $_
-                }
-
               throw "Nenhuma exportação encontrada para $DllPath."
             }
 
-            $exports |
-              Select-Object -First 20 |
-              ForEach-Object {
-                Write-Host "  $_"
-              }
-
-            if ($exports.Count -gt 20) {
-              Write-Host "  ... e mais $($exports.Count - 20)"
-            }
+            $exports | Select-Object -First 20 | ForEach-Object { Write-Host "  $_" }
+            if ($exports.Count -gt 20) { Write-Host "  ... e mais $($exports.Count - 20)" }
 
             return $exports
           }
 
           function Create-DefFile {
-            param(
-              [string]$DllName,
-              [string]$OutputFile,
-              [object[]]$Exports
-            )
-
-            Write-Host ""
-            Write-Host "=========================================="
-            Write-Host "CRIANDO DEF"
-            Write-Host "=========================================="
-            Write-Host $OutputFile
+            param([string]$DllName, [string]$OutputFile, [object[]]$Exports)
 
             $content = New-Object System.Collections.Generic.List[string]
-
-            $content.Add("LIBRARY `"$DllName`"")
+            $content.Add("LIBRARY `"$DllName`")
             $content.Add("EXPORTS")
 
-            foreach ($name in $Exports) {
-              $content.Add("    $name")
-            }
+            foreach ($name in $Exports) { $content.Add("    $name") }
 
-            Set-Content `
-              -Path $OutputFile `
-              -Value $content `
-              -Encoding ascii
-
-            if (-not (Test-Path $OutputFile)) {
-              throw "Não foi possível criar $OutputFile."
-            }
-
-            Write-Host "DEF criado com $($Exports.Count) exports."
+            Set-Content -Path $OutputFile -Value $content -Encoding ascii
+            if (-not (Test-Path $OutputFile)) { throw "Não foi possível criar $OutputFile." }
           }
 
-          # ==========================================
-          # OBS CORE
-          # ==========================================
-
           $obsExports = @(Get-ExportNames $obsDll)
-
           $obsDef = Join-Path $obsBin "obs.def"
-
-          Create-DefFile `
-            -DllName "obs.dll" `
-            -OutputFile $obsDef `
-            -Exports $obsExports
-
-          # ==========================================
-          # OBS FRONTEND API
-          # ==========================================
+          Create-DefFile -DllName "obs.dll" -OutputFile $obsDef -Exports $obsExports
 
           $frontendExports = @(Get-ExportNames $frontendDll)
-
           $frontendDef = Join-Path $obsBin "obs-frontend-api.def"
-
-          Create-DefFile `
-            -DllName "obs-frontend-api.dll" `
-            -OutputFile $frontendDef `
-            -Exports $frontendExports
-
-          # ==========================================
-          # GERAR LIBRARIES
-          # ==========================================
+          Create-DefFile -DllName "obs-frontend-api.dll" -OutputFile $frontendDef -Exports $frontendExports
 
           $obsLib = Join-Path $obsBin "obs.lib"
           $frontendLib = Join-Path $obsBin "obs-frontend-api.lib"
@@ -758,183 +200,58 @@ jobs:
           Write-Host "GERANDO obs.lib"
           Write-Host "=========================================="
 
-          & $env:LIBEXE `
-            /DEF:"$obsDef" `
-            /MACHINE:X64 `
-            /OUT:"$obsLib"
-
-          if ($LASTEXITCODE -ne 0) {
-            throw "Falha ao gerar obs.lib."
-          }
+          & $env:LIBEXE /DEF:"$obsDef" /MACHINE:X64 /OUT:"$obsLib"
+          if ($LASTEXITCODE -ne 0) { throw "Falha ao gerar obs.lib." }
 
           Write-Host ""
           Write-Host "=========================================="
           Write-Host "GERANDO obs-frontend-api.lib"
           Write-Host "=========================================="
 
-          & $env:LIBEXE `
-            /DEF:"$frontendDef" `
-            /MACHINE:X64 `
-            /OUT:"$frontendLib"
+          & $env:LIBEXE /DEF:"$frontendDef" /MACHINE:X64 /OUT:"$frontendLib"
+          if ($LASTEXITCODE -ne 0) { throw "Falha ao gerar obs-frontend-api.lib." }
 
-          if ($LASTEXITCODE -ne 0) {
-            throw "Falha ao gerar obs-frontend-api.lib."
-          }
+          if (-not (Test-Path $obsLib)) { throw "obs.lib não foi criada." }
+          if (-not (Test-Path $frontendLib)) { throw "obs-frontend-api.lib não foi criada." }
 
-          # ==========================================
-          # VERIFICAÇÃO
-          # ==========================================
+          Get-ChildItem $obsBin | Select-Object Name, Length, FullName
+
+          "OBS_IMPORT_DIR=$obsBin" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
           Write-Host ""
           Write-Host "=========================================="
-          Write-Host "IMPORT LIBRARIES GERADAS"
+          Write-Host "IMPORT LIBRARIES GERADAS COM SUCESSO"
           Write-Host "=========================================="
-
-          Get-ChildItem $obsBin |
-            Select-Object Name, Length, FullName
-
-          if (-not (Test-Path $obsLib)) {
-            throw "obs.lib não foi criada."
-          }
-
-          if (-not (Test-Path $frontendLib)) {
-            throw "obs-frontend-api.lib não foi criada."
-          }
-
-          Write-Host ""
-          Write-Host "OBS LIB:"
-          Write-Host $obsLib
-
-          Write-Host ""
-          Write-Host "FRONTEND LIB:"
-          Write-Host $frontendLib
-
-          "OBS_IMPORT_DIR=$obsBin" |
-            Out-File `
-              -FilePath $env:GITHUB_ENV `
-              -Append `
-              -Encoding utf8
-
-          Write-Host ""
-          Write-Host "=========================================="
-          Write-Host "IMPORT LIBRARIES OK"
-          Write-Host "=========================================="
-
-      - name: Verify OBS import libraries
-        shell: pwsh
-        run: |
-          $obsLib = Join-Path $env:OBS_IMPORT_DIR "obs.lib"
-          $frontendLib = Join-Path $env:OBS_IMPORT_DIR "obs-frontend-api.lib"
-
-          if (-not (Test-Path $obsLib)) {
-            throw "obs.lib não foi criada."
-          }
-
-          if (-not (Test-Path $frontendLib)) {
-            throw "obs-frontend-api.lib não foi criada."
-          }
-
-          Get-Item $obsLib | Select-Object FullName, Length
-          Get-Item $frontendLib | Select-Object FullName, Length
 
       - name: Configure CMake
         shell: pwsh
         run: |
-          if (Test-Path "build") {
-            Remove-Item "build" -Recurse -Force
-          }
-
-          cmake `
-            -S . `
-            -B build `
+          cmake -S . -B build `
             -G "Visual Studio 17 2022" `
             -A x64 `
-            -DCMAKE_PREFIX_PATH="$env:QT_PREFIX" `
-            -DOBS_SOURCE_DIR="$env:GITHUB_WORKSPACE\obs-source" `
+            -DCMAKE_PREFIX_PATH="$env:CMAKE_PREFIX_PATH" `
+            -DOBS_SOURCE_DIR="$env:OBS_SOURCE_DIR" `
             -DOBS_BIN_DIR="$env:OBS_IMPORT_DIR"
-
-          if ($LASTEXITCODE -ne 0) {
-            throw "Configuração do CMake falhou."
-          }
 
       - name: Build plugin
         shell: pwsh
         run: |
-          Write-Host "OBS_IMPORT_DIR:"
-          Write-Host "$env:OBS_IMPORT_DIR"
-
-          Get-ChildItem "$env:OBS_IMPORT_DIR" -Force |
-            Select-Object Name, Length, FullName
-
           cmake --build build `
             --config RelWithDebInfo `
-            --parallel `
-            --verbose
+            --parallel
 
-          if ($LASTEXITCODE -ne 0) {
-            throw "Build do plugin falhou."
-          }
-
-      - name: Install package
+      - name: Package plugin
         shell: pwsh
         run: |
-          if (Test-Path "$env:GITHUB_WORKSPACE\package") {
-            Remove-Item "$env:GITHUB_WORKSPACE\package" -Recurse -Force
+          cmake --install build --config RelWithDebInfo --prefix package
+          if (-not (Test-Path "package\obs-plugins\64bit\diretor-de-culto.dll")) {
+            Write-Host "Conteúdo gerado:"
+            Get-ChildItem package -Recurse | Select-Object FullName
+            throw "diretor-de-culto.dll não foi encontrado no pacote."
           }
+          Compress-Archive -Path package\* -DestinationPath "Diretor-de-Culto-OBS27.2.4-Windows-x64.zip" -Force
 
-          cmake --install build `
-            --config RelWithDebInfo `
-            --prefix "$env:GITHUB_WORKSPACE\package"
-
-          if ($LASTEXITCODE -ne 0) {
-            throw "cmake --install falhou."
-          }
-
-          Get-ChildItem "$env:GITHUB_WORKSPACE\package" -Recurse |
-            Select-Object FullName
-
-      - name: Verify plugin package
-        shell: pwsh
-        run: |
-          $plugin = Get-ChildItem `
-            "$env:GITHUB_WORKSPACE\package" `
-            -Filter "diretor-de-culto.dll" `
-            -File `
-            -Recurse `
-            -ErrorAction SilentlyContinue |
-            Select-Object -First 1
-
-          if (-not $plugin) {
-            Get-ChildItem "$env:GITHUB_WORKSPACE\package" -Recurse |
-              Select-Object FullName
-
-            throw "diretor-de-culto.dll não encontrado no pacote final."
-          }
-
-          Write-Host "Plugin encontrado:"
-          Write-Host $plugin.FullName
-
-      - name: Package ZIP
-        shell: pwsh
-        run: |
-          $zip = "$env:GITHUB_WORKSPACE\Diretor-de-Culto-OBS27.2.4-Windows-x64.zip"
-
-          if (Test-Path $zip) {
-            Remove-Item $zip -Force
-          }
-
-          Compress-Archive `
-            -Path "$env:GITHUB_WORKSPACE\package\*" `
-            -DestinationPath $zip `
-            -Force
-
-          if (-not (Test-Path $zip)) {
-            throw "ZIP final não foi criado."
-          }
-
-          Get-Item $zip | Select-Object FullName, Length
-
-      - name: Upload artifact
+      - name: Upload plugin
         uses: actions/upload-artifact@v4
         with:
           name: Diretor-de-Culto-OBS27.2.4-Windows-x64
