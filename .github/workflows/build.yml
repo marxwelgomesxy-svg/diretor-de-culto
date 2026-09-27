@@ -458,9 +458,62 @@ jobs:
           Write-Host "=========================================="
 
           & $env:LIBEXE `
-            /DEF:$obsDef `
+            /DEF:"$obsDef" `
             /MACHINE:X64 `
-            /OUT:$obsLib
+            /OUT:"$obsLib"
+
+          if ($LASTEXITCODE -ne 0) {
+            throw "Falha ao gerar obs.lib."
+          }
+
+          Write-Host ""
+          Write-Host "=========================================="
+          Write-Host "GERANDO obs-frontend-api.lib"
+          Write-Host "=========================================="
+
+          & $env:LIBEXE `
+            /DEF:"$frontendDef" `
+            /MACHINE:X64 `
+            /OUT:"$frontendLib"
+
+          if ($LASTEXITCODE -ne 0) {
+            throw "Falha ao gerar obs-frontend-api.lib."
+          }
+
+          Write-Host ""
+          Write-Host "=========================================="
+          Write-Host "VERIFICANDO IMPORT LIBRARIES"
+          Write-Host "=========================================="
+
+          Get-ChildItem $obsBin |
+            Select-Object Name, Length, FullName
+
+          if (-not (Test-Path $obsLib)) {
+            throw "obs.lib não foi criada."
+          }
+
+          if (-not (Test-Path $frontendLib)) {
+            throw "obs-frontend-api.lib não foi criada."
+          }
+
+          Write-Host ""
+          Write-Host "OBS LIB:"
+          Write-Host $obsLib
+
+          Write-Host ""
+          Write-Host "FRONTEND LIB:"
+          Write-Host $frontendLib
+
+          "OBS_IMPORT_DIR=$obsBin" |
+            Out-File `
+              -FilePath $env:GITHUB_ENV `
+              -Append `
+              -Encoding utf8
+
+          Write-Host ""
+          Write-Host "=========================================="
+          Write-Host "IMPORT LIBRARIES GERADAS COM SUCESSO"
+          Write-Host "=========================================="
 
           if ($LASTEXITCODE -ne 0) {
       - name: Generate OBS import libraries
