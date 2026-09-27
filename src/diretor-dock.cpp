@@ -519,7 +519,7 @@ DiretorDock::Suggestion DiretorDock::buildRuleSuggestion(const QString &current)
     if (result.scene == lastIgnoredScene_) {
         result.scene = current;
         result.confidence = 0;
-        result.reasons = {QStringLiteral("Sugestão anterior foi ignorada pelo operador")};
+        result.reasons = QStringList() << QStringLiteral("Sugestão anterior foi ignorada pelo operador");
         result.source = QStringLiteral("Motor local");
     }
     return result;
@@ -713,7 +713,7 @@ void DiretorDock::ignoreSuggestion()
     if (suggestion_.scene == lastIgnoredScene_ || suggestion_.scene == current) {
         suggestion_.scene = current;
         suggestion_.confidence = 0;
-        suggestion_.reasons = {QStringLiteral("Sugestão ignorada. Aguardando nova evidência.")};
+        suggestion_.reasons = QStringList() << QStringLiteral("Sugestão ignorada. Aguardando nova evidência.");
     }
     suggestion_.source = QStringLiteral("Operador + motor local");
     secondsSinceAnalysis_ = 0;
@@ -944,9 +944,10 @@ void DiretorDock::onAIReply()
     if (target.isEmpty() || !scenes.contains(target) || target == current || target == lastIgnoredScene_) {
         suggestion_.scene = current;
         suggestion_.confidence = 0;
-        suggestion_.reasons = {target == lastIgnoredScene_
-                                   ? QStringLiteral("A IA repetiu uma cena ignorada; aguardando nova evidência.")
-                                   : QStringLiteral("IA não encontrou evidência suficiente para outro corte")};
+        suggestion_.reasons = QStringList()
+            << (target == lastIgnoredScene_
+                    ? QStringLiteral("A IA repetiu uma cena ignorada; aguardando nova evidência.")
+                    : QStringLiteral("IA não encontrou evidência suficiente para outro corte"));
         suggestion_.source = QStringLiteral("IA local");
         setAIStatus(QStringLiteral("● IA LOCAL: conectada"), true);
         updateUi();
