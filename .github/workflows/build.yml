@@ -80,8 +80,8 @@ jobs:
           if (Test-Path $dest) { Remove-Item $dest -Recurse -Force }
 
           Invoke-WebRequest `
-            -Uri 'https://github.com/obsproject/obs-deps/releases/download/2021-12-14/windows-deps-2021-12-14-x64.zip' `
-            -OutFile $zip
+          -Uri 'https://github.com/obsproject/obs-deps/releases/download/win-2022-01-01/windows-deps-2022-01-01.zip' `
+          -OutFile $zip
 
           Expand-Archive -Path $zip -DestinationPath $dest -Force
 
