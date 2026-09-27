@@ -254,7 +254,6 @@ void DiretorDock::startMediaAnalysis()
     audioConversion.samples_per_sec = static_cast<uint32_t>(kAudioSampleRate);
     audioConversion.format = AUDIO_FORMAT_FLOAT;
     audioConversion.speakers = SPEAKERS_STEREO;
-    audioConversion.allow_clipping = true;
     obs_add_raw_audio_callback(0, &audioConversion, &DiretorDock::rawAudioCallback, this);
 }
 
