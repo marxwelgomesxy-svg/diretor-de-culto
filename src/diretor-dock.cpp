@@ -21,15 +21,16 @@
 #include <QRadioButton>
 #include <QUrl>
 #include <QVBoxLayout>
+#include <QProcess>
+#include <QRegularExpression>
 #include <algorithm>
 #include <cmath>
 #include <map>
-#include <mutex>
 
 namespace {
 constexpr int kAnalysisIntervalMs = 1000;
 constexpr int kSuggestionEverySeconds = 5;
-constexpr int kMinimumCutIntervalSeconds = 5;
+constexpr int kMinimumCutIntervalSeconds = 3;
 constexpr int kAIAnalysisEverySeconds = 7;
 constexpr int kFrameWidth = 320;
 constexpr int kFrameHeight = 180;
@@ -42,17 +43,16 @@ QString normalize(const QString &value)
 
 QString joinReasons(const QStringList &reasons)
 {
-    QString result;
-    for (const QString &reason : reasons)
-        result += QStringLiteral("• ") + reason + QStringLiteral("\n");
-    return result.trimmed();
-}
+    if (reasons.isEmpty())
+        return QStringLiteral("Nenhuma evidência no momento.");
 
-QLabel *makeTitle(const QString &text)
-{
-    auto *label = new QLabel(text);
-    label->setObjectName(QStringLiteral("sectionTitle"));
-    return label;
+    QStringList clean;
+    for (const QString &reason : reasons) {
+        const QString r = reason.trimmed();
+        if (!r.isEmpty())
+            clean << QStringLiteral("• ") + r;
+    }
+    return clean.join(QStringLiteral("\n"));
 }
 
 QString jsonString(const QJsonObject &obj, const char *key)
@@ -64,63 +64,82 @@ QString jsonString(const QJsonObject &obj, const char *key)
 DiretorDock::DiretorDock(QWidget *parent) : QWidget(parent)
 {
     setObjectName(QStringLiteral("DiretorDeCulto"));
-    setMinimumWidth(360);
-    setMinimumHeight(720);
+    setMinimumWidth(340);
 
     auto *root = new QVBoxLayout(this);
-    root->setContentsMargins(12, 10, 12, 10);
-    root->setSpacing(7);
+    root->setContentsMargins(9, 7, 9, 7);
+    root->setSpacing(5);
 
     auto *titleRow = new QHBoxLayout();
     auto *title = new QLabel(QStringLiteral("DIRETOR DE CULTO"));
     title->setObjectName(QStringLiteral("mainTitle"));
-    statusLabel_ = new QLabel(QStringLiteral("● SISTEMA ATIVO"));
+    statusLabel_ = new QLabel(QStringLiteral("● DESLIGADO"));
     statusLabel_->setObjectName(QStringLiteral("activeStatus"));
     titleRow->addWidget(title);
     titleRow->addStretch();
     titleRow->addWidget(statusLabel_);
     root->addLayout(titleRow);
 
+    directorToggleButton_ = new QPushButton(QStringLiteral("▶ LIGAR DIRETOR DE CULTO"));
+    directorToggleButton_->setObjectName(QStringLiteral("directorToggle"));
+    directorToggleButton_->setCheckable(true);
+    directorToggleButton_->setMinimumHeight(34);
+    root->addWidget(directorToggleButton_);
+
     auto *liveBox = new QGroupBox(QStringLiteral("CÂMERA / CENA NO AR"));
     auto *liveLayout = new QVBoxLayout(liveBox);
+    liveLayout->setContentsMargins(7, 5, 7, 5);
     liveSceneLabel_ = new QLabel(QStringLiteral("Aguardando OBS..."));
     liveSceneLabel_->setObjectName(QStringLiteral("liveScene"));
-    liveBadge_ = new QLabel(QStringLiteral("● NO AR"));
+    liveSceneLabel_->setWordWrap(true);
+    liveBadge_ = new QLabel(QStringLiteral(""));
     liveBadge_->setObjectName(QStringLiteral("liveBadge"));
     liveLayout->addWidget(liveSceneLabel_);
     liveLayout->addWidget(liveBadge_);
     root->addWidget(liveBox);
 
-    auto *aiBox = new QGroupBox(QStringLiteral("INTELIGÊNCIA LOCAL"));
+    auto *aiBox = new QGroupBox(QStringLiteral("INTELIGÊNCIA LOCAL — OLLAMA"));
     auto *aiLayout = new QVBoxLayout(aiBox);
+    aiLayout->setContentsMargins(7, 5, 7, 5);
+
     auto *modelRow = new QHBoxLayout();
-    modelRow->addWidget(new QLabel(QStringLiteral("Modelo:")));
+    auto *modelLabel = new QLabel(QStringLiteral("Modelo:"));
     modelEdit_ = new QLineEdit(QStringLiteral("qwen3-vl:2b"));
-    modelEdit_->setToolTip(QStringLiteral("Modelo Ollama local. Sem chave API."));
-    modelRow->addWidget(modelEdit_);
+    modelEdit_->setToolTip(QStringLiteral("Modelo multimodal local. Não usa chave API."));
+    modelRow->addWidget(modelLabel);
+    modelRow->addWidget(modelEdit_, 1);
     aiLayout->addLayout(modelRow);
+
     auto *aiButtons = new QHBoxLayout();
     testAIButton_ = new QPushButton(QStringLiteral("TESTAR IA"));
+    installAIButton_ = new QPushButton(QStringLiteral("INSTALAR IA"));
     aiButton_ = new QPushButton(QStringLiteral("ANALISAR AGORA"));
     aiButtons->addWidget(testAIButton_);
+    aiButtons->addWidget(installAIButton_);
     aiButtons->addWidget(aiButton_);
     aiLayout->addLayout(aiButtons);
-    aiStatusLabel_ = new QLabel(QStringLiteral("● IA LOCAL: não testada"));
+
+    aiStatusLabel_ = new QLabel(QStringLiteral("● IA LOCAL: aguardando diretor"));
     aiStatusLabel_->setObjectName(QStringLiteral("aiStatus"));
+    aiStatusLabel_->setWordWrap(true);
     aiLayout->addWidget(aiStatusLabel_);
     root->addWidget(aiBox);
 
     auto *suggestionBox = new QGroupBox(QStringLiteral("SUGESTÃO DE CORTE"));
     auto *suggestionLayout = new QVBoxLayout(suggestionBox);
+    suggestionLayout->setContentsMargins(7, 5, 7, 5);
+
     suggestionSceneLabel_ = new QLabel(QStringLiteral("Aguardando análise..."));
     suggestionSceneLabel_->setObjectName(QStringLiteral("suggestionScene"));
+    suggestionSceneLabel_->setWordWrap(true);
     confidenceLabel_ = new QLabel(QStringLiteral("Confiança: --"));
     confidenceLabel_->setObjectName(QStringLiteral("confidence"));
-    reasonsLabel_ = new QLabel(QStringLiteral("Aguardando o Diretor analisar as cenas."));
+    reasonsLabel_ = new QLabel(QStringLiteral("Ligue o Diretor durante a transmissão para começar a análise."));
     reasonsLabel_->setWordWrap(true);
     reasonsLabel_->setObjectName(QStringLiteral("reasons"));
-    analysisContextLabel_ = new QLabel(QStringLiteral("Fonte: motor local"));
+    analysisContextLabel_ = new QLabel(QStringLiteral("Fonte: —"));
     analysisContextLabel_->setObjectName(QStringLiteral("context"));
+
     suggestionLayout->addWidget(suggestionSceneLabel_);
     suggestionLayout->addWidget(confidenceLabel_);
     suggestionLayout->addWidget(reasonsLabel_);
@@ -131,35 +150,38 @@ DiretorDock::DiretorDock(QWidget *parent) : QWidget(parent)
     ignoreButton_ = new QPushButton(QStringLiteral("IGNORAR"));
     cutButton_->setObjectName(QStringLiteral("cutButton"));
     ignoreButton_->setObjectName(QStringLiteral("ignoreButton"));
-    buttons->addWidget(cutButton_);
-    buttons->addWidget(ignoreButton_);
+    buttons->addWidget(cutButton_, 1);
+    buttons->addWidget(ignoreButton_, 1);
     suggestionLayout->addLayout(buttons);
     root->addWidget(suggestionBox);
 
     auto *telemetryBox = new QGroupBox(QStringLiteral("MONITORAMENTO AO VIVO"));
     auto *telemetryLayout = new QVBoxLayout(telemetryBox);
-    audioStatusLabel_ = new QLabel(QStringLiteral("Microfone/áudio: aguardando dados"));
-    motionStatusLabel_ = new QLabel(QStringLiteral("Movimento da imagem: aguardando dados"));
+    telemetryLayout->setContentsMargins(7, 5, 7, 5);
+    audioStatusLabel_ = new QLabel(QStringLiteral("Áudio: parado"));
+    motionStatusLabel_ = new QLabel(QStringLiteral("Imagem: parada"));
     telemetryLayout->addWidget(audioStatusLabel_);
     telemetryLayout->addWidget(motionStatusLabel_);
     root->addWidget(telemetryBox);
 
     auto *analysisBox = new QGroupBox(QStringLiteral("PRÓXIMA ANÁLISE"));
     auto *analysisLayout = new QVBoxLayout(analysisBox);
+    analysisLayout->setContentsMargins(7, 5, 7, 5);
     progressBar_ = new QProgressBar();
     progressBar_->setRange(0, kSuggestionEverySeconds * 10);
     progressBar_->setValue(0);
     progressBar_->setTextVisible(false);
-    nextAnalysisLabel_ = new QLabel(QStringLiteral("Próxima análise em 5s"));
+    nextAnalysisLabel_ = new QLabel(QStringLiteral("Diretor desligado"));
     analysisLayout->addWidget(progressBar_);
     analysisLayout->addWidget(nextAnalysisLabel_);
     root->addWidget(analysisBox);
 
     auto *modeBox = new QGroupBox(QStringLiteral("MODO DE OPERAÇÃO"));
     auto *modeLayout = new QVBoxLayout(modeBox);
-    manualRadio_ = new QRadioButton(QStringLiteral("Manual"));
-    assistidoRadio_ = new QRadioButton(QStringLiteral("Assistido"));
-    automaticoRadio_ = new QRadioButton(QStringLiteral("Automático"));
+    modeLayout->setContentsMargins(7, 5, 7, 5);
+    manualRadio_ = new QRadioButton(QStringLiteral("Manual — não corta sozinho"));
+    assistidoRadio_ = new QRadioButton(QStringLiteral("Assistido — sugere e aguarda CORTAR"));
+    automaticoRadio_ = new QRadioButton(QStringLiteral("Automático — corta quando atingir a segurança"));
     assistidoRadio_->setChecked(true);
     modeGroup_ = new QButtonGroup(this);
     modeGroup_->addButton(manualRadio_, static_cast<int>(Mode::Manual));
@@ -170,8 +192,9 @@ DiretorDock::DiretorDock(QWidget *parent) : QWidget(parent)
     modeLayout->addWidget(automaticoRadio_);
     root->addWidget(modeBox);
 
-    auto *summaryBox = new QGroupBox(QStringLiteral("RESUMO DO CULTO"));
+    auto *summaryBox = new QGroupBox(QStringLiteral("RESUMO DA TRANSMISSÃO"));
     auto *summaryLayout = new QVBoxLayout(summaryBox);
+    summaryLayout->setContentsMargins(7, 5, 7, 5);
     timeLabel_ = new QLabel(QStringLiteral("Transmissão: 00:00:00"));
     cutsLabel_ = new QLabel(QStringLiteral("Cortes: 0"));
     mostUsedLabel_ = new QLabel(QStringLiteral("Mais usada: --"));
@@ -179,62 +202,131 @@ DiretorDock::DiretorDock(QWidget *parent) : QWidget(parent)
     summaryLayout->addWidget(cutsLabel_);
     summaryLayout->addWidget(mostUsedLabel_);
     root->addWidget(summaryBox);
-    root->addStretch();
 
     network_ = new QNetworkAccessManager(this);
 
+    connect(directorToggleButton_, &QPushButton::clicked, this, &DiretorDock::toggleDirector);
     connect(cutButton_, &QPushButton::clicked, this, &DiretorDock::cutSuggestion);
     connect(ignoreButton_, &QPushButton::clicked, this, &DiretorDock::ignoreSuggestion);
     connect(aiButton_, &QPushButton::clicked, this, &DiretorDock::askLocalAI);
     connect(testAIButton_, &QPushButton::clicked, this, &DiretorDock::testAIConnection);
+    connect(installAIButton_, &QPushButton::clicked, this, &DiretorDock::installAI);
     connect(modeGroup_, QOverload<int>::of(&QButtonGroup::buttonClicked), this, [this](int) { modeChanged(); });
 
     analysisTimer_ = new QTimer(this);
     analysisTimer_->setInterval(kAnalysisIntervalMs);
     connect(analysisTimer_, &QTimer::timeout, this, &DiretorDock::analyze);
-    analysisTimer_->start();
 
     progressTimer_ = new QTimer(this);
     progressTimer_->setInterval(100);
     connect(progressTimer_, &QTimer::timeout, this, &DiretorDock::updateProgress);
-    progressTimer_->start();
-
-    lastCutTime_ = std::chrono::steady_clock::now();
 
     setStyleSheet(QStringLiteral(R"(
-        QWidget#DiretorDeCulto { background:#171717; color:#eeeeee; font-family:"Segoe UI"; font-size:10pt; }
-        QLabel#mainTitle { font-size:15pt; font-weight:800; }
-        QLabel#activeStatus { color:#49d17d; font-weight:700; }
-        QGroupBox { border:1px solid #393939; border-radius:6px; margin-top:8px; padding-top:9px; background:#202020; font-weight:700; }
-        QGroupBox::title { subcontrol-origin:margin; left:9px; padding:0 5px; color:#cfcfcf; }
-        QLabel#liveScene { font-size:15pt; font-weight:800; }
+        QWidget#DiretorDeCulto { background:#171717; color:#eeeeee; font-family:"Segoe UI"; font-size:9pt; }
+        QLabel#mainTitle { font-size:14pt; font-weight:800; }
+        QLabel#activeStatus { color:#d5a33c; font-weight:800; }
+        QGroupBox { border:1px solid #3a3a3a; border-radius:5px; margin-top:7px; padding-top:7px; background:#202020; font-weight:700; }
+        QGroupBox::title { subcontrol-origin:margin; left:8px; padding:0 4px; color:#cfcfcf; }
+        QLabel#liveScene { font-size:13pt; font-weight:800; }
         QLabel#liveBadge { color:#ff4f4f; font-weight:800; }
-        QLabel#suggestionScene { color:#f0a13b; font-size:15pt; font-weight:800; }
+        QLabel#suggestionScene { color:#f0a13b; font-size:13pt; font-weight:800; }
         QLabel#confidence { color:#58d38b; font-weight:800; }
         QLabel#reasons, QLabel#context { color:#cccccc; }
         QLabel#aiStatus { color:#d5a33c; font-weight:700; }
-        QPushButton { min-height:34px; border-radius:5px; border:1px solid #4a4a4a; background:#2b2b2b; color:#ffffff; font-weight:800; padding:0 9px; }
+        QPushButton { min-height:29px; border-radius:4px; border:1px solid #4a4a4a; background:#2b2b2b; color:#ffffff; font-weight:800; padding:0 6px; }
         QPushButton:hover { background:#383838; }
-        QPushButton#cutButton { background:#b43f36; border-color:#c74b41; }
-        QPushButton#cutButton:disabled { background:#4a2926; color:#999999; }
-        QLineEdit { min-height:28px; background:#151515; border:1px solid #444444; border-radius:4px; color:#ffffff; padding:0 7px; }
-        QProgressBar { height:8px; border:0; border-radius:4px; background:#303030; }
-        QProgressBar::chunk { background:#d58b36; border-radius:4px; }
-        QRadioButton { spacing:7px; padding:3px; }
+        QPushButton#directorToggle { background:#315c3f; border-color:#4d8c61; }
+        QPushButton#directorToggle:checked { background:#8a352f; border-color:#c24b42; }
+        QPushButton#cutButton { background:#a83b35; border-color:#c74b41; }
+        QPushButton#cutButton:disabled { background:#4a2926; color:#8e8e8e; }
+        QPushButton#ignoreButton:disabled, QPushButton:disabled { color:#888888; }
+        QLineEdit { min-height:25px; background:#151515; border:1px solid #444444; border-radius:4px; color:#ffffff; padding:0 6px; }
+        QProgressBar { height:7px; border:0; border-radius:3px; background:#303030; }
+        QProgressBar::chunk { background:#d58b36; border-radius:3px; }
+        QRadioButton { spacing:5px; padding:1px; }
     )"));
 
-    startMediaAnalysis();
     refreshFromObs();
 }
 
 DiretorDock::~DiretorDock()
 {
-    stopMediaAnalysis();
+    stopLoop();
     if (pendingReply_) {
         pendingReply_->abort();
         pendingReply_->deleteLater();
         pendingReply_ = nullptr;
     }
+}
+
+void DiretorDock::startLoop()
+{
+    if (!directorEnabled_ || !streamingActive_)
+        return;
+    if (!analysisTimer_->isActive())
+        analysisTimer_->start();
+    if (!progressTimer_->isActive())
+        progressTimer_->start();
+    startMediaAnalysis();
+    nextAnalysisLabel_->setText(QStringLiteral("Próxima análise em %1s").arg(kSuggestionEverySeconds));
+    testAIConnection();
+}
+
+void DiretorDock::stopLoop()
+{
+    analysisTimer_->stop();
+    progressTimer_->stop();
+    stopMediaAnalysis();
+    progressBar_->setValue(0);
+    nextAnalysisLabel_->setText(directorEnabled_ ? QStringLiteral("Aguardando transmissão") : QStringLiteral("Diretor desligado"));
+    if (pendingReply_ && aiBusy_) {
+        pendingReply_->abort();
+    }
+    aiBusy_ = false;
+}
+
+void DiretorDock::updateStreamingState()
+{
+    const bool active = obs_frontend_streaming_active();
+    if (active && !previousStreamingState_) {
+        elapsedSeconds_ = 0;
+        cuts_ = 0;
+        mostUsedScene_.clear();
+        mostUsedCount_ = 0;
+        secondsSinceCut_ = 9999;
+        secondsSinceAnalysis_ = 0;
+        secondsSinceAI_ = 9999;
+        suggestion_ = Suggestion{};
+        lastIgnoredScene_.clear();
+    }
+
+    streamingActive_ = active;
+    previousStreamingState_ = active;
+
+    if (directorEnabled_ && streamingActive_)
+        startLoop();
+    else
+        stopLoop();
+
+    updateUi();
+}
+
+void DiretorDock::toggleDirector()
+{
+    directorEnabled_ = directorToggleButton_->isChecked();
+    if (directorEnabled_) {
+        directorToggleButton_->setText(QStringLiteral("■ DESLIGAR DIRETOR DE CULTO"));
+        setStatus(streamingActive_ ? QStringLiteral("● DIRETOR ATIVO") : QStringLiteral("● AGUARDANDO STREAM"), true);
+        if (streamingActive_)
+            startLoop();
+    } else {
+        directorToggleButton_->setText(QStringLiteral("▶ LIGAR DIRETOR DE CULTO"));
+        setStatus(QStringLiteral("● DESLIGADO"), false);
+        stopLoop();
+        suggestion_ = Suggestion{};
+        aiLastDecision_.clear();
+    }
+    updateUi();
 }
 
 void DiretorDock::startMediaAnalysis()
@@ -263,6 +355,11 @@ void DiretorDock::stopMediaAnalysis()
         return;
     obs_remove_raw_video_callback(&DiretorDock::rawVideoCallback, this);
     obs_remove_raw_audio_callback(0, &DiretorDock::rawAudioCallback, this);
+    audioRms_.store(0.0f, std::memory_order_relaxed);
+    motionScore_.store(0.0f, std::memory_order_relaxed);
+    QMutexLocker locker(&frameMutex_);
+    latestFrame_ = QImage();
+    previousLuma_.clear();
 }
 
 void DiretorDock::rawVideoCallback(void *param, struct video_data *frame)
@@ -375,7 +472,8 @@ DiretorDock::Suggestion DiretorDock::buildRuleSuggestion(const QString &current)
 {
     Suggestion result;
     const QString n = normalize(current);
-    if (n.contains(QStringLiteral("PASTOR")) && !n.contains(QStringLiteral("EDIT"))) {
+
+    if (n == QStringLiteral("1 - PASTOR")) {
         result.scene = QStringLiteral("PASTOR EDIT");
         result.confidence = 68;
         result.reasons << QStringLiteral("Existe uma versão EDIT/zoom correspondente");
@@ -383,7 +481,7 @@ DiretorDock::Suggestion DiretorDock::buildRuleSuggestion(const QString &current)
         result.scene = QStringLiteral("1 - PASTOR");
         result.confidence = 65;
         result.reasons << QStringLiteral("Alternância disponível entre plano normal e EDIT");
-    } else if (n.contains(QStringLiteral("SOLO")) && !n.contains(QStringLiteral("EDIT"))) {
+    } else if (n == QStringLiteral("2 - SOLO")) {
         result.scene = QStringLiteral("SOLO EDIT");
         result.confidence = 68;
         result.reasons << QStringLiteral("Existe uma versão EDIT/zoom correspondente");
@@ -399,23 +497,45 @@ DiretorDock::Suggestion DiretorDock::buildRuleSuggestion(const QString &current)
         result.scene = QStringLiteral("CAMERA 2");
         result.confidence = 63;
         result.reasons << QStringLiteral("Alternância disponível entre plano normal e EDIT");
+    } else {
+        const QRegularExpression hymn(QStringLiteral("^HINO\\s+(\\d+)$"));
+        const auto match = hymn.match(n);
+        if (match.hasMatch()) {
+            const int number = match.captured(1).toInt();
+            if (number >= 1 && number < 15) {
+                result.scene = QStringLiteral("HINO %1").arg(number + 1);
+                result.confidence = 55;
+                result.reasons << QStringLiteral("Próxima cena HINO disponível na sequência");
+            }
+        }
     }
+
     if (result.scene.isEmpty()) {
         result.scene = current;
         result.confidence = 0;
         result.reasons << QStringLiteral("Sem evidência suficiente para sugerir outra cena");
+    }
+
+    if (result.scene == lastIgnoredScene_) {
+        result.scene = current;
+        result.confidence = 0;
+        result.reasons = {QStringLiteral("Sugestão anterior foi ignorada pelo operador")};
+        result.source = QStringLiteral("Motor local");
     }
     return result;
 }
 
 void DiretorDock::refreshFromObs()
 {
+    updateStreamingState();
     updateUi();
-    analyze();
 }
 
 void DiretorDock::analyze()
 {
+    if (!directorEnabled_ || !streamingActive_)
+        return;
+
     elapsedSeconds_++;
     secondsSinceCut_++;
     secondsSinceAnalysis_++;
@@ -423,24 +543,30 @@ void DiretorDock::analyze()
 
     const QString current = currentSceneName();
     if (current.isEmpty()) {
-        setStatus(QStringLiteral("● AGUARDANDO OBS"), false);
-        liveSceneLabel_->setText(QStringLiteral("Nenhuma cena disponível"));
+        setStatus(QStringLiteral("● AGUARDANDO CENA"), false);
+        updateUi();
         return;
     }
 
-    setStatus(QStringLiteral("● SISTEMA ATIVO"), true);
-    if (secondsSinceAnalysis_ >= kSuggestionEverySeconds || suggestion_.scene.isEmpty()) {
+    setStatus(mode_ == Mode::Automatico ? QStringLiteral("● AUTOMÁTICO")
+                                         : mode_ == Mode::Assistido ? QStringLiteral("● ASSISTIDO")
+                                                                    : QStringLiteral("● MANUAL"), true);
+
+    if (mode_ == Mode::Manual) {
+        suggestion_ = Suggestion{};
+    } else if (secondsSinceAnalysis_ >= kSuggestionEverySeconds || suggestion_.scene.isEmpty()) {
         suggestion_ = buildRuleSuggestion(current);
         secondsSinceAnalysis_ = 0;
     }
 
-    if (secondsSinceAI_ >= kAIAnalysisEverySeconds && !aiBusy_)
+    if (mode_ != Mode::Manual && secondsSinceAI_ >= kAIAnalysisEverySeconds && !aiBusy_)
         askLocalAI();
 
     if (mode_ == Mode::Automatico && suggestion_.confidence >= 80 &&
         suggestion_.scene != current && secondsSinceCut_ >= kMinimumCutIntervalSeconds) {
         applyScene(suggestion_.scene);
     }
+
     updateUi();
 }
 
@@ -448,24 +574,53 @@ void DiretorDock::updateUi()
 {
     const QString current = currentSceneName();
     liveSceneLabel_->setText(current.isEmpty() ? QStringLiteral("Nenhuma cena") : current);
-    liveBadge_->setText(QStringLiteral("● NO AR"));
 
-    suggestionSceneLabel_->setText(suggestion_.scene.isEmpty() ? QStringLiteral("Aguardando...") : suggestion_.scene);
-    confidenceLabel_->setText(suggestion_.confidence > 0
-                                   ? QStringLiteral("Confiança: %1%").arg(suggestion_.confidence)
-                                   : QStringLiteral("Confiança: --"));
-    reasonsLabel_->setText(joinReasons(suggestion_.reasons));
-    analysisContextLabel_->setText(QStringLiteral("Fonte: %1").arg(suggestion_.source));
+    if (streamingActive_) {
+        liveBadge_->setText(QStringLiteral("● NO AR"));
+        liveBadge_->show();
+    } else {
+        liveBadge_->clear();
+        liveBadge_->hide();
+    }
 
-    cutButton_->setEnabled(!suggestion_.scene.isEmpty() && suggestion_.scene != current && suggestion_.confidence > 0);
-    ignoreButton_->setEnabled(suggestion_.confidence > 0);
+    if (!directorEnabled_) {
+        suggestionSceneLabel_->setText(QStringLiteral("Diretor desligado"));
+        confidenceLabel_->setText(QStringLiteral("Confiança: —"));
+        reasonsLabel_->setText(QStringLiteral("Pressione LIGAR DIRETOR DE CULTO para ativar a análise."));
+        analysisContextLabel_->setText(QStringLiteral("Fonte: —"));
+    } else if (!streamingActive_) {
+        suggestionSceneLabel_->setText(QStringLiteral("Aguardando transmissão"));
+        confidenceLabel_->setText(QStringLiteral("Confiança: —"));
+        reasonsLabel_->setText(QStringLiteral("O Diretor fica em espera até a transmissão começar."));
+        analysisContextLabel_->setText(QStringLiteral("Fonte: —"));
+    } else {
+        suggestionSceneLabel_->setText(suggestion_.scene.isEmpty() ? QStringLiteral("Aguardando análise...") : suggestion_.scene);
+        confidenceLabel_->setText(suggestion_.confidence > 0
+                                       ? QStringLiteral("Confiança: %1%").arg(suggestion_.confidence)
+                                       : QStringLiteral("Confiança: —"));
+        reasonsLabel_->setText(joinReasons(suggestion_.reasons));
+        analysisContextLabel_->setText(QStringLiteral("Fonte: %1").arg(suggestion_.source));
+    }
+
+    const bool validSuggestion = directorEnabled_ && streamingActive_ &&
+                                 !suggestion_.scene.isEmpty() && suggestion_.scene != current &&
+                                 suggestion_.confidence > 0;
+    const bool canCut = validSuggestion && secondsSinceCut_ >= kMinimumCutIntervalSeconds;
+    cutButton_->setEnabled(canCut);
+    ignoreButton_->setEnabled(validSuggestion);
 
     const float rms = audioRms_.load(std::memory_order_relaxed);
     const float motion = motionScore_.load(std::memory_order_relaxed);
     const int audioPct = std::clamp(static_cast<int>(rms * 100.0f * 2.5f), 0, 100);
     const int motionPct = std::clamp(static_cast<int>(motion * 100.0f), 0, 100);
-    audioStatusLabel_->setText(QStringLiteral("Microfone/áudio: %1% %2").arg(audioPct).arg(audioPct > 6 ? QStringLiteral("• sinal ativo") : QStringLiteral("• silêncio/baixo")));
-    motionStatusLabel_->setText(QStringLiteral("Movimento da imagem: %1% %2").arg(motionPct).arg(motionPct > 12 ? QStringLiteral("• mudança detectada") : QStringLiteral("• estável")));
+
+    if (streamingActive_ && directorEnabled_) {
+        audioStatusLabel_->setText(QStringLiteral("Áudio: %1% %2").arg(audioPct).arg(audioPct > 6 ? QStringLiteral("• sinal ativo") : QStringLiteral("• baixo/silêncio")));
+        motionStatusLabel_->setText(QStringLiteral("Imagem: %1% %2").arg(motionPct).arg(motionPct > 12 ? QStringLiteral("• mudança") : QStringLiteral("• estável")));
+    } else {
+        audioStatusLabel_->setText(QStringLiteral("Áudio: parado"));
+        motionStatusLabel_->setText(QStringLiteral("Imagem: parada"));
+    }
 
     const int hours = static_cast<int>(elapsedSeconds_ / 3600);
     const int minutes = static_cast<int>((elapsedSeconds_ % 3600) / 60);
@@ -476,11 +631,20 @@ void DiretorDock::updateUi()
                             .arg(seconds, 2, 10, QLatin1Char('0')));
     cutsLabel_->setText(QStringLiteral("Cortes: %1").arg(cuts_));
     mostUsedLabel_->setText(mostUsedScene_.isEmpty() ? QStringLiteral("Mais usada: --") : QStringLiteral("Mais usada: %1").arg(mostUsedScene_));
+
+    if (!directorEnabled_)
+        setStatus(QStringLiteral("● DESLIGADO"), false);
+    else if (!streamingActive_)
+        setStatus(QStringLiteral("● AGUARDANDO STREAM"), true);
 }
 
 void DiretorDock::applyScene(const QString &sceneName)
 {
-    if (sceneName.isEmpty())
+    if (sceneName.isEmpty() || !streamingActive_ || !directorEnabled_)
+        return;
+
+    const QString current = currentSceneName();
+    if (sceneName == current)
         return;
 
     obs_frontend_source_list scenes = {};
@@ -493,9 +657,10 @@ void DiretorDock::applyScene(const QString &sceneName)
             break;
         }
     }
+
     if (!target) {
         obs_frontend_source_list_free(&scenes);
-        setStatus(QStringLiteral("● CENA NÃO ENCONTRADA"), false);
+        reasonsLabel_->setText(QStringLiteral("Cena não encontrada no OBS: %1").arg(sceneName));
         return;
     }
 
@@ -510,26 +675,28 @@ void DiretorDock::applyScene(const QString &sceneName)
     cuts_++;
     secondsSinceCut_ = 0;
     secondsSinceAI_ = kAIAnalysisEverySeconds;
-    const QString actual = currentSceneName();
-    const QString used = actual.isEmpty() ? sceneName : actual;
+    const QString used = sceneName;
     static std::map<QString, int> usage;
     const int count = ++usage[used];
     if (count > mostUsedCount_) {
         mostUsedCount_ = count;
         mostUsedScene_ = used;
     }
+
+    suggestion_ = Suggestion{};
+    secondsSinceAnalysis_ = 0;
     updateUi();
 }
 
 void DiretorDock::cutSuggestion()
 {
-    if (suggestion_.confidence <= 0)
+    if (!directorEnabled_ || !streamingActive_)
         return;
     const QString current = currentSceneName();
-    if (suggestion_.scene == current)
+    if (suggestion_.scene.isEmpty() || suggestion_.scene == current || suggestion_.confidence <= 0)
         return;
     if (secondsSinceCut_ < kMinimumCutIntervalSeconds) {
-        reasonsLabel_->setText(QStringLiteral("Corte protegido: aguarde %1s entre cortes.").arg(kMinimumCutIntervalSeconds));
+        reasonsLabel_->setText(QStringLiteral("Corte protegido: aguarde %1s entre cortes.").arg(kMinimumCutIntervalSeconds - secondsSinceCut_));
         return;
     }
     applyScene(suggestion_.scene);
@@ -537,10 +704,17 @@ void DiretorDock::cutSuggestion()
 
 void DiretorDock::ignoreSuggestion()
 {
+    if (!directorEnabled_ || !streamingActive_ || suggestion_.scene.isEmpty() || suggestion_.scene == currentSceneName())
+        return;
+
     lastIgnoredScene_ = suggestion_.scene;
-    suggestion_ = buildRuleSuggestion(currentSceneName());
-    suggestion_.confidence = std::max(0, suggestion_.confidence - 20);
-    suggestion_.reasons.prepend(QStringLiteral("Sugestão anterior ignorada pelo operador"));
+    const QString current = currentSceneName();
+    suggestion_ = buildRuleSuggestion(current);
+    if (suggestion_.scene == lastIgnoredScene_ || suggestion_.scene == current) {
+        suggestion_.scene = current;
+        suggestion_.confidence = 0;
+        suggestion_.reasons = {QStringLiteral("Sugestão ignorada. Aguardando nova evidência.")};
+    }
     suggestion_.source = QStringLiteral("Operador + motor local");
     secondsSinceAnalysis_ = 0;
     updateUi();
@@ -557,11 +731,9 @@ void DiretorDock::modeChanged()
         mode_ = Mode::Assistido;
 
     if (mode_ == Mode::Manual)
-        setStatus(QStringLiteral("● MANUAL"), true);
-    else if (mode_ == Mode::Automatico)
-        setStatus(QStringLiteral("● AUTOMÁTICO"), true);
-    else
-        setStatus(QStringLiteral("● ASSISTIDO"), true);
+        suggestion_ = Suggestion{};
+
+    updateUi();
 }
 
 void DiretorDock::setStatus(const QString &text, bool active)
@@ -583,10 +755,16 @@ void DiretorDock::setAIStatus(const QString &text, bool online)
 
 void DiretorDock::updateProgress()
 {
+    if (!directorEnabled_ || !streamingActive_) {
+        progressBar_->setValue(0);
+        return;
+    }
+
     const int elapsedTenths = static_cast<int>((secondsSinceAnalysis_ * 10) % (kSuggestionEverySeconds * 10));
     progressBar_->setValue(std::clamp(elapsedTenths, 0, kSuggestionEverySeconds * 10));
     const int remaining = std::max(0, kSuggestionEverySeconds - static_cast<int>(secondsSinceAnalysis_));
-    nextAnalysisLabel_->setText(remaining > 0 ? QStringLiteral("Próxima análise em %1s").arg(remaining) : QStringLiteral("Analisando...") );
+    nextAnalysisLabel_->setText(remaining > 0 ? QStringLiteral("Próxima análise em %1s").arg(remaining)
+                                              : QStringLiteral("Analisando..."));
 }
 
 QString DiretorDock::buildAIPrompt(const QString &current) const
@@ -597,22 +775,24 @@ QString DiretorDock::buildAIPrompt(const QString &current) const
 
     QString prompt;
     prompt += QStringLiteral("Você é o DIRETOR DE CULTO de uma transmissão ao vivo.\n");
-    prompt += QStringLiteral("Escolha somente uma cena da lista fornecida. Nunca invente nome de cena.\n");
-    prompt += QStringLiteral("A cena atual é: ") + current + QStringLiteral("\n");
-    prompt += QStringLiteral("Áudio RMS aproximado: ") + QString::number(audio, 'f', 3) + QStringLiteral("\n");
-    prompt += QStringLiteral("Movimento visual aproximado: ") + QString::number(motion, 'f', 3) + QStringLiteral("\n");
+    prompt += QStringLiteral("Escolha somente uma cena da lista. Nunca invente nome de cena.\n");
+    prompt += QStringLiteral("Cena atual: ") + current + QStringLiteral("\n");
+    prompt += QStringLiteral("Áudio RMS: ") + QString::number(audio, 'f', 3) + QStringLiteral("\n");
+    prompt += QStringLiteral("Movimento visual: ") + QString::number(motion, 'f', 3) + QStringLiteral("\n");
     prompt += QStringLiteral("Cenas disponíveis:\n- ") + scenes.join(QStringLiteral("\n- ")) + QStringLiteral("\n\n");
-    prompt += QStringLiteral("Se houver imagem, analise pessoas, enquadramento, apresentação, movimento, instrumentos, pastor, regente e contexto visual.\n");
-    prompt += QStringLiteral("Considere também áudio e permanência na cena. Não faça corte só porque passou tempo.\n");
-    prompt += QStringLiteral("Retorne SOMENTE JSON neste formato: {\"scene\":\"NOME EXATO\",\"confidence\":0,\"reasons\":[\"motivo\"]}.\n");
-    prompt += QStringLiteral("Se não houver evidência suficiente, use a própria cena atual e confidence 0.\n");
+    prompt += QStringLiteral("Analise a imagem atual: pessoas, enquadramento, pastor, solo, regente, instrumentos, grupo e contexto.\n");
+    prompt += QStringLiteral("Considere áudio e movimento como sinais auxiliares. Não troque de cena apenas por tempo.\n");
+    prompt += QStringLiteral("Só recomende corte se houver evidência clara.\n");
+    prompt += QStringLiteral("Retorne SOMENTE JSON: {\"scene\":\"NOME EXATO\",\"confidence\":0,\"reasons\":[\"motivo curto\"]}.\n");
+    prompt += QStringLiteral("Se não houver evidência, use a cena atual e confidence 0.\n");
     return prompt;
 }
 
 void DiretorDock::testAIConnection()
 {
-    if (pendingReply_)
+    if (!directorEnabled_ || !streamingActive_ || pendingReply_)
         return;
+
     QNetworkRequest request(QUrl(QStringLiteral("http://127.0.0.1:11434/api/tags")));
     request.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/json"));
     pendingReply_ = network_->get(request);
@@ -620,9 +800,30 @@ void DiretorDock::testAIConnection()
     setAIStatus(QStringLiteral("● IA LOCAL: verificando Ollama..."), false);
 }
 
+void DiretorDock::installAI()
+{
+    if (!directorEnabled_) {
+        setAIStatus(QStringLiteral("● IA LOCAL: ligue o Diretor primeiro"), false);
+        return;
+    }
+
+    const QString model = modelEdit_->text().trimmed();
+    if (model.isEmpty()) {
+        setAIStatus(QStringLiteral("● IA LOCAL: informe o modelo"), false);
+        return;
+    }
+
+    const bool started = QProcess::startDetached(QStringLiteral("ollama"), QStringList{QStringLiteral("pull"), model});
+    if (started) {
+        setAIStatus(QStringLiteral("● IA LOCAL: baixando %1 — aguarde e teste novamente").arg(model), false);
+    } else {
+        setAIStatus(QStringLiteral("● IA LOCAL: Ollama não encontrado no Windows. Instale o Ollama e tente novamente."), false);
+    }
+}
+
 void DiretorDock::askLocalAI()
 {
-    if (aiBusy_ || pendingReply_)
+    if (!directorEnabled_ || !streamingActive_ || aiBusy_ || pendingReply_)
         return;
 
     QImage frame;
@@ -631,13 +832,13 @@ void DiretorDock::askLocalAI()
         frame = latestFrame_.copy();
     }
     if (frame.isNull()) {
-        setAIStatus(QStringLiteral("● IA LOCAL: aguardando frame do OBS"), false);
+        setAIStatus(QStringLiteral("● IA LOCAL: aguardando vídeo do OBS"), false);
         return;
     }
 
     const QString model = modelEdit_->text().trimmed();
     if (model.isEmpty()) {
-        setAIStatus(QStringLiteral("● IA LOCAL: informe um modelo Ollama"), false);
+        setAIStatus(QStringLiteral("● IA LOCAL: informe um modelo"), false);
         return;
     }
 
@@ -652,6 +853,7 @@ void DiretorDock::askLocalAI()
     body.insert(QStringLiteral("prompt"), buildAIPrompt(currentSceneName()));
     body.insert(QStringLiteral("stream"), false);
     body.insert(QStringLiteral("format"), QStringLiteral("json"));
+    body.insert(QStringLiteral("options"), QJsonObject{{QStringLiteral("temperature"), 0.1}});
     body.insert(QStringLiteral("images"), QJsonArray{QString::fromLatin1(imageBytes.toBase64())});
 
     QNetworkRequest request(QUrl(QStringLiteral("http://127.0.0.1:11434/api/generate")));
@@ -660,7 +862,7 @@ void DiretorDock::askLocalAI()
     aiBusy_ = true;
     secondsSinceAI_ = 0;
     connect(pendingReply_, &QNetworkReply::finished, this, &DiretorDock::onAIReply);
-    setAIStatus(QStringLiteral("● IA LOCAL: analisando vídeo + áudio + cenas..."), false);
+    setAIStatus(QStringLiteral("● IA LOCAL: analisando imagem + áudio + cenas..."), false);
 }
 
 void DiretorDock::onAIReply()
@@ -679,7 +881,12 @@ void DiretorDock::onAIReply()
     aiBusy_ = false;
 
     if (error != QNetworkReply::NoError) {
-        setAIStatus(QStringLiteral("● IA LOCAL: offline — inicie o Ollama"), false);
+        if (directorEnabled_ && streamingActive_) {
+            // Tenta iniciar o servidor local se o Ollama estiver instalado e ainda não estiver rodando.
+                QProcess::startDetached(QStringLiteral("ollama"), QStringList{QStringLiteral("serve")});
+            QTimer::singleShot(2500, this, &DiretorDock::testAIConnection);
+        }
+        setAIStatus(QStringLiteral("● IA LOCAL: offline. Use INSTALAR IA se o modelo ainda não estiver instalado."), false);
         return;
     }
 
@@ -691,7 +898,20 @@ void DiretorDock::onAIReply()
     }
 
     if (outer.object().contains(QStringLiteral("models"))) {
-        setAIStatus(QStringLiteral("● IA LOCAL: Ollama conectado"), true);
+        const QJsonArray models = outer.object().value(QStringLiteral("models")).toArray();
+        const QString wanted = modelEdit_->text().trimmed();
+        bool found = false;
+        for (const QJsonValue &value : models) {
+            const QString name = value.toObject().value(QStringLiteral("name")).toString();
+            if (name == wanted || name.startsWith(wanted + QStringLiteral(":"))) {
+                found = true;
+                break;
+            }
+        }
+        if (found)
+            setAIStatus(QStringLiteral("● IA LOCAL: Ollama conectado • %1 pronto").arg(wanted), true);
+        else
+            setAIStatus(QStringLiteral("● IA LOCAL: Ollama conectado, mas %1 não está instalado").arg(wanted), false);
         return;
     }
 
@@ -721,10 +941,12 @@ void DiretorDock::onAIReply()
 
     const QStringList scenes = allSceneNames();
     const QString current = currentSceneName();
-    if (target.isEmpty() || !scenes.contains(target) || target == current) {
+    if (target.isEmpty() || !scenes.contains(target) || target == current || target == lastIgnoredScene_) {
         suggestion_.scene = current;
         suggestion_.confidence = 0;
-        suggestion_.reasons = QStringList{QStringLiteral("IA não encontrou evidência suficiente para outro corte")};
+        suggestion_.reasons = {target == lastIgnoredScene_
+                                   ? QStringLiteral("A IA repetiu uma cena ignorada; aguardando nova evidência.")
+                                   : QStringLiteral("IA não encontrou evidência suficiente para outro corte")};
         suggestion_.source = QStringLiteral("IA local");
         setAIStatus(QStringLiteral("● IA LOCAL: conectada"), true);
         updateUi();
@@ -736,6 +958,6 @@ void DiretorDock::onAIReply()
     suggestion_.reasons = reasons.isEmpty() ? QStringList{QStringLiteral("Decisão visual/contextual da IA local")} : reasons;
     suggestion_.source = QStringLiteral("IA local + sensores OBS");
     aiLastDecision_ = target;
-    setAIStatus(QStringLiteral("● IA LOCAL: conectada • última decisão: %1").arg(target), true);
+    setAIStatus(QStringLiteral("● IA LOCAL: conectada • sugestão: %1").arg(target), true);
     updateUi();
 }

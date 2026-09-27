@@ -21,6 +21,7 @@ class QButtonGroup;
 class QGroupBox;
 class QLineEdit;
 class QNetworkReply;
+class QCheckBox;
 
 class DiretorDock final : public QWidget {
     Q_OBJECT
@@ -39,6 +40,8 @@ private slots:
     void modeChanged();
     void askLocalAI();
     void testAIConnection();
+    void installAI();
+    void toggleDirector();
     void updateProgress();
     void onAIReply();
 
@@ -64,6 +67,9 @@ private:
     void setAIStatus(const QString &text, bool online);
     void startMediaAnalysis();
     void stopMediaAnalysis();
+    void startLoop();
+    void stopLoop();
+    void updateStreamingState();
 
     static void rawVideoCallback(void *param, struct video_data *frame);
     static void rawAudioCallback(void *param, size_t mix_idx, struct audio_data *data);
@@ -91,6 +97,8 @@ private:
     QPushButton *ignoreButton_ = nullptr;
     QPushButton *aiButton_ = nullptr;
     QPushButton *testAIButton_ = nullptr;
+    QPushButton *installAIButton_ = nullptr;
+    QPushButton *directorToggleButton_ = nullptr;
     QRadioButton *manualRadio_ = nullptr;
     QRadioButton *assistidoRadio_ = nullptr;
     QRadioButton *automaticoRadio_ = nullptr;
@@ -103,6 +111,9 @@ private:
     QNetworkReply *pendingReply_ = nullptr;
 
     Mode mode_ = Mode::Assistido;
+    bool directorEnabled_ = false;
+    bool streamingActive_ = false;
+    bool previousStreamingState_ = false;
     Suggestion suggestion_;
     QString lastIgnoredScene_;
 

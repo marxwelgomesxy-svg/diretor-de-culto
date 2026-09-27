@@ -27,7 +27,11 @@ static void frontend_event(enum obs_frontend_event event, void *)
         event == OBS_FRONTEND_EVENT_SCENE_LIST_CHANGED ||
         event == OBS_FRONTEND_EVENT_STUDIO_MODE_ENABLED ||
         event == OBS_FRONTEND_EVENT_STUDIO_MODE_DISABLED ||
-        event == OBS_FRONTEND_EVENT_PREVIEW_SCENE_CHANGED) {
+        event == OBS_FRONTEND_EVENT_PREVIEW_SCENE_CHANGED ||
+        event == OBS_FRONTEND_EVENT_STREAMING_STARTED ||
+        event == OBS_FRONTEND_EVENT_STREAMING_STOPPED ||
+        event == OBS_FRONTEND_EVENT_STREAMING_STARTING ||
+        event == OBS_FRONTEND_EVENT_STREAMING_STOPPING) {
         QMetaObject::invokeMethod(g_dock, "refreshFromObs", Qt::QueuedConnection);
     }
 }
@@ -63,7 +67,7 @@ static void create_dock()
 
 bool obs_module_load(void)
 {
-    blog(LOG_INFO, "[Diretor de Culto] carregando V3 nativa C++/Qt");
+    blog(LOG_INFO, "[Diretor de Culto] carregando V4 nativa C++/Qt");
     obs_frontend_add_event_callback(frontend_event, nullptr);
     if (QApplication::instance())
         QMetaObject::invokeMethod(QApplication::instance(), create_dock, Qt::QueuedConnection);
@@ -83,5 +87,5 @@ void obs_module_unload(void)
 
 const char *obs_module_description(void)
 {
-    return "Diretor de Culto V3 - IA local, visão, áudio e gestão inteligente de cenas";
+    return "Diretor de Culto V4 - IA local, visão, áudio e gestão inteligente de cenas";
 }
