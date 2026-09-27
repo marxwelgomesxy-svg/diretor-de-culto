@@ -463,6 +463,254 @@ jobs:
             /OUT:$obsLib
 
           if ($LASTEXITCODE -ne 0) {
+      - name: Generate OBS import libraries
+        shell: pwsh
+        run: |
+          $obsBin = Join-Path $env:RUNNER_TEMP "obs-import-libs"
+
+          if (Test-Path $obsBin) {
+            Remove-Item $obsBin -Recurse -Force
+          }
+
+          New-Item `
+            -ItemType Directory `
+            -Force `
+            -Path $obsBin | Out-Null
+
+          $obsDll = Join-Path $env:OBS_RUNTIME_DIR "obs.dll"
+          $frontendDll = Join-Path $env:OBS_RUNTIME_DIR "obs-frontend-api.dll"
+
+          if (-not (Test-Path $obsDll)) {
+            throw "obs.dll não encontrado em: $obsDll"
+          }
+
+          if (-not (Test-Path $frontendDll)) {
+            throw "obs-frontend-api.dll não encontrado em: $frontendDll"
+          }
+
+          Write-Host ""
+          Write-Host "=========================================="
+          Write-Host "DLLs ENCONTRADAS"
+          Write-Host "=========================================="
+          Write-Host "obs.dll:"
+          Write-Host $obsDll
+          Write-Host ""
+          Write-Host "obs-frontend-api.dll:"
+          Write-Host $frontendDll
+
+          function Get-ExportNames {
+            param(
+              [string]$DllPath
+            )
+
+            Write-Host ""
+            Write-Host "=========================================="
+            Write-Host "DUMPBIN: $DllPath"
+            Write-Host "=========================================="
+
+            # Captura toda a saída como texto puro.
+            $rawOutput = & $env:DUMPBIN /exports "$DllPath" 2>&1 |
+              Out-String
+
+            $exitCode = $LASTEXITCODE
+
+            if ($exitCode -ne 0) {
+              Write-Host $rawOutput
+              throw "dumpbin falhou para $DllPath com código $exitCode."
+            }
+
+            Write-Host $rawOutput
+
+            # Divide novamente em linhas reais.
+            $lines = $rawOutput -split "`r?`n"
+
+            $exports = New-Object System.Collections.Generic.List[string]
+
+            $started = $false
+
+            foreach ($line in $lines) {
+
+              $trimmed = $line.Trim()
+
+              # Detecta o cabeçalho da tabela.
+              if ($trimmed -match '^ordinal\s+hint\s+RVA\s+name') {
+                $started = $true
+                continue
+              }
+
+              if (-not $started) {
+                continue
+              }
+
+              if ([string]::IsNullOrWhiteSpace($trimmed)) {
+                continue
+              }
+
+              # Ignora separadores.
+              if ($trimmed -match '^-+$') {
+                continue
+              }
+
+              # Formato real do dumpbin:
+              #
+              # 1    0    00021830    array_output_serializer_free =
+              #
+              # Pegamos os três primeiros campos e todo o restante como nome.
+              if ($trimmed -match '^\d+\s+[0-9A-Fa-f]+\s+[0-9A-Fa-f]+\s+(.+?)\s*$') {
+
+                $name = $matches[1].Trim()
+
+                if ($name) {
+
+                  # Remove alias do dumpbin:
+                  #
+                  # funcao = funcao
+                  #
+                  # ou
+                  #
+                  # funcao = outra_funcao
+                  #
+                  if ($name -match '^([^\s=]+)\s*=\s*(.+)$') {
+                    $name = $matches[1].Trim()
+                  }
+
+                  if ($name -and
+                      $name -notmatch '^__IMPORT_DESCRIPTOR' -and
+                      $name -notmatch '^__NULL_IMPORT_DESCRIPTOR' -and
+                      $name -notmatch '^NULL_THUNK_DATA') {
+
+                    $exports.Add($name)
+                  }
+                }
+              }
+            }
+
+            $exports = @(
+              $exports |
+                Where-Object {
+                  -not [string]::IsNullOrWhiteSpace($_)
+                } |
+                Sort-Object -Unique
+            )
+
+            Write-Host ""
+            Write-Host "=========================================="
+            Write-Host "EXPORTS ENCONTRADOS"
+            Write-Host "=========================================="
+            Write-Host "Quantidade: $($exports.Count)"
+
+            if ($exports.Count -eq 0) {
+              Write-Host ""
+              Write-Host "ERRO: o parser não encontrou exports."
+              Write-Host ""
+              Write-Host "Cabeçalho encontrado:"
+              Write-Host "ordinal hint RVA name"
+              Write-Host ""
+              Write-Host "Primeiras linhas da tabela:"
+
+              $lines |
+                Where-Object {
+                  $_ -match '^\s*\d+\s+[0-9A-Fa-f]+\s+[0-9A-Fa-f]+\s+'
+                } |
+                Select-Object -First 20 |
+                ForEach-Object {
+                  Write-Host $_
+                }
+
+              throw "Nenhuma exportação encontrada para $DllPath."
+            }
+
+            $exports |
+              Select-Object -First 20 |
+              ForEach-Object {
+                Write-Host "  $_"
+              }
+
+            if ($exports.Count -gt 20) {
+              Write-Host "  ... e mais $($exports.Count - 20)"
+            }
+
+            return $exports
+          }
+
+          function Create-DefFile {
+            param(
+              [string]$DllName,
+              [string]$OutputFile,
+              [object[]]$Exports
+            )
+
+            Write-Host ""
+            Write-Host "=========================================="
+            Write-Host "CRIANDO DEF"
+            Write-Host "=========================================="
+            Write-Host $OutputFile
+
+            $content = New-Object System.Collections.Generic.List[string]
+
+            $content.Add("LIBRARY `"$DllName`"")
+            $content.Add("EXPORTS")
+
+            foreach ($name in $Exports) {
+              $content.Add("    $name")
+            }
+
+            Set-Content `
+              -Path $OutputFile `
+              -Value $content `
+              -Encoding ascii
+
+            if (-not (Test-Path $OutputFile)) {
+              throw "Não foi possível criar $OutputFile."
+            }
+
+            Write-Host "DEF criado com $($Exports.Count) exports."
+          }
+
+          # ==========================================
+          # OBS CORE
+          # ==========================================
+
+          $obsExports = @(Get-ExportNames $obsDll)
+
+          $obsDef = Join-Path $obsBin "obs.def"
+
+          Create-DefFile `
+            -DllName "obs.dll" `
+            -OutputFile $obsDef `
+            -Exports $obsExports
+
+          # ==========================================
+          # OBS FRONTEND API
+          # ==========================================
+
+          $frontendExports = @(Get-ExportNames $frontendDll)
+
+          $frontendDef = Join-Path $obsBin "obs-frontend-api.def"
+
+          Create-DefFile `
+            -DllName "obs-frontend-api.dll" `
+            -OutputFile $frontendDef `
+            -Exports $frontendExports
+
+          # ==========================================
+          # GERAR LIBRARIES
+          # ==========================================
+
+          $obsLib = Join-Path $obsBin "obs.lib"
+          $frontendLib = Join-Path $obsBin "obs-frontend-api.lib"
+
+          Write-Host ""
+          Write-Host "=========================================="
+          Write-Host "GERANDO obs.lib"
+          Write-Host "=========================================="
+
+          & $env:LIBEXE `
+            /DEF:"$obsDef" `
+            /MACHINE:X64 `
+            /OUT:"$obsLib"
+
+          if ($LASTEXITCODE -ne 0) {
             throw "Falha ao gerar obs.lib."
           }
 
@@ -472,9 +720,9 @@ jobs:
           Write-Host "=========================================="
 
           & $env:LIBEXE `
-            /DEF:$frontendDef `
+            /DEF:"$frontendDef" `
             /MACHINE:X64 `
-            /OUT:$frontendLib
+            /OUT:"$frontendLib"
 
           if ($LASTEXITCODE -ne 0) {
             throw "Falha ao gerar obs-frontend-api.lib."
@@ -500,11 +748,24 @@ jobs:
             throw "obs-frontend-api.lib não foi criada."
           }
 
+          Write-Host ""
+          Write-Host "OBS LIB:"
+          Write-Host $obsLib
+
+          Write-Host ""
+          Write-Host "FRONTEND LIB:"
+          Write-Host $frontendLib
+
           "OBS_IMPORT_DIR=$obsBin" |
             Out-File `
               -FilePath $env:GITHUB_ENV `
               -Append `
               -Encoding utf8
+
+          Write-Host ""
+          Write-Host "=========================================="
+          Write-Host "IMPORT LIBRARIES OK"
+          Write-Host "=========================================="
 
       - name: Verify OBS import libraries
         shell: pwsh
