@@ -19,76 +19,110 @@ jobs:
         run: |
           git clone --depth 1 --branch 27.2.4 https://github.com/obsproject/obs-studio.git obs-source
 
-      - name: Download OBS Studio 27.2.4 runtime
-        shell: pwsh
-        run: |
-          Invoke-WebRequest `
-            -Uri "https://github.com/obsproject/obs-studio/releases/download/27.2.4/OBS-Studio-27.2.4-Full-x64.zip" `
-            -OutFile "$env:RUNNER_TEMP\obs-runtime.zip"
-
-          New-Item -ItemType Directory -Force -Path "$env:RUNNER_TEMP\obs-runtime" | Out-Null
-
-          Expand-Archive `
-            -Path "$env:RUNNER_TEMP\obs-runtime.zip" `
-            -DestinationPath "$env:RUNNER_TEMP\obs-runtime" `
-            -Force
-
-          $obsRoot = Get-ChildItem "$env:RUNNER_TEMP\obs-runtime" -Directory |
-            Select-Object -First 1
-
-          if (-not $obsRoot) {
-            $obsRoot = Get-Item "$env:RUNNER_TEMP\obs-runtime"
-          }
-
-          "OBS_RUNTIME_DIR=$($obsRoot.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append
-
       - name: Download OBS 27.2.4 Qt5 dependencies
         shell: pwsh
         run: |
+          $qtZip = "$env:RUNNER_TEMP\obs-deps-qt5.zip"
+          $qtExtract = "$env:RUNNER_TEMP\obs-deps-qt5"
+
+          Write-Host "=========================================="
+          Write-Host "BAIXANDO QT5 PARA OBS 27.2.4"
+          Write-Host "=========================================="
+
           Invoke-WebRequest `
             -Uri "https://github.com/obsproject/obs-deps/releases/download/2022-08-02/windows-deps-qt5-2022-08-02-x64.zip" `
-            -OutFile "$env:RUNNER_TEMP\obs-deps.zip"
+            -OutFile $qtZip
 
-          New-Item -ItemType Directory -Force -Path "$env:RUNNER_TEMP\obs-deps" | Out-Null
+          if (-not (Test-Path $qtZip)) {
+            throw "Download do pacote Qt5 falhou."
+          }
+
+          Write-Host "ZIP baixado:"
+          Get-Item $qtZip | Select-Object FullName, Length
+
+          if (Test-Path $qtExtract) {
+            Remove-Item $qtExtract -Recurse -Force
+          }
+
+          New-Item `
+            -ItemType Directory `
+            -Force `
+            -Path $qtExtract | Out-Null
 
           Expand-Archive `
-            -Path "$env:RUNNER_TEMP\obs-deps.zip" `
-            -DestinationPath "$env:RUNNER_TEMP\obs-deps" `
+            -Path $qtZip `
+            -DestinationPath $qtExtract `
             -Force
 
-          $qtRoot = Get-ChildItem "$env:RUNNER_TEMP\obs-deps" -Directory |
+          Write-Host ""
+          Write-Host "=========================================="
+          Write-Host "PROCURANDO Qt5Config.cmake"
+          Write-Host "=========================================="
+
+          $qtConfig = Get-ChildItem `
+            -Path $qtExtract `
+            -Filter "Qt5Config.cmake" `
+            -File `
+            -Recurse `
+            -ErrorAction SilentlyContinue |
             Select-Object -First 1
 
-          if (-not $qtRoot) {
-            $qtRoot = Get-Item "$env:RUNNER_TEMP\obs-deps"
-          }
-
-          $qtDir = Get-ChildItem $qtRoot.FullName -Directory -Recurse |
-            Where-Object { $_.Name -eq "lib" -and (Test-Path (Join-Path $_.FullName "cmake\Qt5")) } |
-            Select-Object -First 1
-
-          if (-not $qtDir) {
-            $qtDir = Get-ChildItem $qtRoot.FullName -Directory -Recurse |
-              Where-Object { $_.Name -eq "cmake" -and (Test-Path (Join-Path $_.FullName "Qt5")) } |
-              Select-Object -First 1
-          }
-
-          if (-not $qtDir) {
-            Write-Host "Estrutura encontrada:"
-            Get-ChildItem $qtRoot.FullName -Recurse -Depth 4 |
+          if (-not $qtConfig) {
+            Write-Host ""
+            Write-Host "Qt5Config.cmake não encontrado."
+            Write-Host "Estrutura do pacote:"
+            
+            Get-ChildItem `
+              -Path $qtExtract `
+              -Recurse `
+              -Depth 5 |
               Select-Object FullName
-            throw "Qt5 não foi localizado no pacote de dependências."
+
+            throw "Qt5Config.cmake não foi localizado no pacote Qt5."
           }
 
-          if ($qtDir.Name -eq "lib") {
-            $qtPrefix = Split-Path $qtDir.FullName -Parent
-          } else {
-            $qtPrefix = Split-Path (Split-Path $qtDir.FullName -Parent) -Parent
+          Write-Host "Qt5Config.cmake encontrado:"
+          Write-Host $qtConfig.FullName
+
+          #
+          # Exemplo esperado:
+          #
+          # .../lib/cmake/Qt5/Qt5Config.cmake
+          #
+          # Então o prefixo Qt será:
+          #
+          # .../
+          #
+
+          $qtCmakeDir = $qtConfig.Directory.FullName
+          $qtCmakeParent = Split-Path $qtCmakeDir -Parent
+          $qtLibDir = Split-Path $qtCmakeParent -Parent
+          $qtPrefix = Split-Path $qtLibDir -Parent
+
+          Write-Host ""
+          Write-Host "=========================================="
+          Write-Host "QT5 DETECTADO"
+          Write-Host "=========================================="
+          Write-Host "Qt5 config : $qtCmakeDir"
+          Write-Host "Qt5 lib    : $qtLibDir"
+          Write-Host "Qt5 prefix : $qtPrefix"
+
+          if (-not (Test-Path (Join-Path $qtPrefix "lib"))) {
+            Write-Host "Aviso: prefixo não possui lib diretamente."
+            Write-Host "Usando diretório pai do Qt5Config.cmake."
+
+            $qtPrefix = Split-Path $qtLibDir -Parent
           }
 
-          "QT_PREFIX=$qtPrefix" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "QT_PREFIX=$qtPrefix" |
+            Out-File `
+              -FilePath $env:GITHUB_ENV `
+              -Append `
+              -Encoding utf8
 
-          Write-Host "Qt prefix: $qtPrefix"
+          Write-Host ""
+          Write-Host "QT_PREFIX configurado como:"
+          Write-Host "$qtPrefix"
 
       - name: Locate Visual Studio tools
         shell: pwsh
