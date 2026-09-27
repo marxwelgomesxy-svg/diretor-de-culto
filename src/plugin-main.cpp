@@ -1,7 +1,7 @@
 /*
- * Diretor de Culto - native OBS Studio plugin
- * Compatibility target: OBS Studio 27.2.4 / Windows x64
- * 100% C++ / Qt. No Lua, Python or external script is required.
+ * Diretor de Culto V5
+ * OBS Studio 27.2.4 / Windows x64
+ * Native C++/Qt. Gemini API is optional and requires the user's API key.
  */
 #include <obs-module.h>
 #include <obs-frontend-api.h>
@@ -22,17 +22,21 @@ static void frontend_event(enum obs_frontend_event event, void *)
 {
     if (!g_dock)
         return;
-    if (event == OBS_FRONTEND_EVENT_FINISHED_LOADING ||
-        event == OBS_FRONTEND_EVENT_SCENE_CHANGED ||
-        event == OBS_FRONTEND_EVENT_SCENE_LIST_CHANGED ||
-        event == OBS_FRONTEND_EVENT_STUDIO_MODE_ENABLED ||
-        event == OBS_FRONTEND_EVENT_STUDIO_MODE_DISABLED ||
-        event == OBS_FRONTEND_EVENT_PREVIEW_SCENE_CHANGED ||
-        event == OBS_FRONTEND_EVENT_STREAMING_STARTED ||
-        event == OBS_FRONTEND_EVENT_STREAMING_STOPPED ||
-        event == OBS_FRONTEND_EVENT_STREAMING_STARTING ||
-        event == OBS_FRONTEND_EVENT_STREAMING_STOPPING) {
+    switch (event) {
+    case OBS_FRONTEND_EVENT_FINISHED_LOADING:
+    case OBS_FRONTEND_EVENT_SCENE_CHANGED:
+    case OBS_FRONTEND_EVENT_SCENE_LIST_CHANGED:
+    case OBS_FRONTEND_EVENT_STUDIO_MODE_ENABLED:
+    case OBS_FRONTEND_EVENT_STUDIO_MODE_DISABLED:
+    case OBS_FRONTEND_EVENT_PREVIEW_SCENE_CHANGED:
+    case OBS_FRONTEND_EVENT_STREAMING_STARTED:
+    case OBS_FRONTEND_EVENT_STREAMING_STOPPED:
+    case OBS_FRONTEND_EVENT_STREAMING_STARTING:
+    case OBS_FRONTEND_EVENT_STREAMING_STOPPING:
         QMetaObject::invokeMethod(g_dock, "refreshFromObs", Qt::QueuedConnection);
+        break;
+    default:
+        break;
     }
 }
 
@@ -53,6 +57,7 @@ static void create_dock()
     dockWindow->setFeatures(QDockWidget::DockWidgetMovable |
                             QDockWidget::DockWidgetFloatable |
                             QDockWidget::DockWidgetClosable);
+    dockWindow->resize(420, 820);
 
     auto *content = new DiretorDock(dockWindow);
     dockWindow->setWidget(content);
@@ -62,12 +67,12 @@ static void create_dock()
     g_dock = content;
     dockWindow->hide();
     content->refreshFromObs();
-    blog(LOG_INFO, "[Diretor de Culto] V3 criada para OBS 27.2.4");
+    blog(LOG_INFO, "[Diretor de Culto] V5 carregada para OBS 27.2.4");
 }
 
 bool obs_module_load(void)
 {
-    blog(LOG_INFO, "[Diretor de Culto] carregando V4 nativa C++/Qt");
+    blog(LOG_INFO, "[Diretor de Culto] carregando V5 nativa C++/Qt + Gemini");
     obs_frontend_add_event_callback(frontend_event, nullptr);
     if (QApplication::instance())
         QMetaObject::invokeMethod(QApplication::instance(), create_dock, Qt::QueuedConnection);
@@ -87,5 +92,5 @@ void obs_module_unload(void)
 
 const char *obs_module_description(void)
 {
-    return "Diretor de Culto V4 - IA local, visão, áudio e gestão inteligente de cenas";
+    return "Diretor de Culto V5 - direção assistida por visão e áudio com Gemini API";
 }
