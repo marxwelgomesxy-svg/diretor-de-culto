@@ -17,17 +17,101 @@ jobs:
       - name: Download OBS Studio 27.2.4 source
         shell: pwsh
         run: |
-          git clone --depth 1 --branch 27.2.4 https://github.com/obsproject/obs-studio.git obs-source
+          if (Test-Path "$env:GITHUB_WORKSPACE\obs-source") {
+            Remove-Item "$env:GITHUB_WORKSPACE\obs-source" -Recurse -Force
+          }
+
+          git clone --depth 1 --branch 27.2.4 `
+            https://github.com/obsproject/obs-studio.git `
+            "$env:GITHUB_WORKSPACE\obs-source"
+
+          if (-not (Test-Path "$env:GITHUB_WORKSPACE\obs-source\CMakeLists.txt")) {
+            throw "Código-fonte do OBS 27.2.4 não foi baixado corretamente."
+          }
+
+      - name: Download OBS Studio 27.2.4 runtime
+        shell: pwsh
+        run: |
+          $zip = "$env:RUNNER_TEMP\obs-runtime.zip"
+          $extract = "$env:RUNNER_TEMP\obs-runtime"
+
+          Invoke-WebRequest `
+            -Uri "https://github.com/obsproject/obs-studio/releases/download/27.2.4/OBS-Studio-27.2.4-Full-x64.zip" `
+            -OutFile $zip
+
+          if (-not (Test-Path $zip)) {
+            throw "Download do OBS 27.2.4 falhou."
+          }
+
+          if (Test-Path $extract) {
+            Remove-Item $extract -Recurse -Force
+          }
+
+          New-Item -ItemType Directory -Force -Path $extract | Out-Null
+
+          Expand-Archive -Path $zip -DestinationPath $extract -Force
+
+          $obsDll = Get-ChildItem `
+            -Path $extract `
+            -Filter "obs.dll" `
+            -File `
+            -Recurse `
+            -ErrorAction SilentlyContinue |
+            Where-Object { $_.FullName -match "\\bin\\64bit\\obs\.dll$" } |
+            Select-Object -First 1
+
+          if (-not $obsDll) {
+            $obsDll = Get-ChildItem `
+              -Path $extract `
+              -Filter "obs.dll" `
+              -File `
+              -Recurse `
+              -ErrorAction SilentlyContinue |
+              Select-Object -First 1
+          }
+
+          if (-not $obsDll) {
+            Write-Host "Estrutura extraída:"
+            Get-ChildItem $extract -Recurse -Depth 6 | Select-Object FullName
+            throw "obs.dll não encontrado no pacote OBS 27.2.4."
+          }
+
+          $obsRuntimeDir = $obsDll.Directory.FullName
+          $frontendDll = Join-Path $obsRuntimeDir "obs-frontend-api.dll"
+
+          if (-not (Test-Path $frontendDll)) {
+            $frontendDll = Get-ChildItem `
+              -Path $extract `
+              -Filter "obs-frontend-api.dll" `
+              -File `
+              -Recurse `
+              -ErrorAction SilentlyContinue |
+              Where-Object { $_.FullName -match "\\bin\\64bit\\obs-frontend-api\.dll$" } |
+              Select-Object -First 1
+          }
+
+          if (-not $frontendDll) {
+            throw "obs-frontend-api.dll não encontrado no runtime do OBS 27.2.4."
+          }
+
+          if ($frontendDll -is [System.IO.FileInfo]) {
+            $frontendDllPath = $frontendDll.FullName
+          } else {
+            $frontendDllPath = $frontendDll
+          }
+
+          Write-Host "obs.dll: $($obsDll.FullName)"
+          Write-Host "obs-frontend-api.dll: $frontendDllPath"
+          Write-Host "OBS_RUNTIME_DIR: $obsRuntimeDir"
+
+          "OBS_RUNTIME_DIR=$obsRuntimeDir" |
+            Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
       - name: Download OBS 27.2.4 Qt5 dependencies
         shell: pwsh
         run: |
           $qtZip = "$env:RUNNER_TEMP\obs-deps-qt5.zip"
           $qtExtract = "$env:RUNNER_TEMP\obs-deps-qt5"
-
-          Write-Host "=========================================="
-          Write-Host "BAIXANDO QT5 PARA OBS 27.2.4"
-          Write-Host "=========================================="
 
           Invoke-WebRequest `
             -Uri "https://github.com/obsproject/obs-deps/releases/download/2022-08-02/windows-deps-qt5-2022-08-02-x64.zip" `
@@ -37,27 +121,13 @@ jobs:
             throw "Download do pacote Qt5 falhou."
           }
 
-          Write-Host "ZIP baixado:"
-          Get-Item $qtZip | Select-Object FullName, Length
-
           if (Test-Path $qtExtract) {
             Remove-Item $qtExtract -Recurse -Force
           }
 
-          New-Item `
-            -ItemType Directory `
-            -Force `
-            -Path $qtExtract | Out-Null
+          New-Item -ItemType Directory -Force -Path $qtExtract | Out-Null
 
-          Expand-Archive `
-            -Path $qtZip `
-            -DestinationPath $qtExtract `
-            -Force
-
-          Write-Host ""
-          Write-Host "=========================================="
-          Write-Host "PROCURANDO Qt5Config.cmake"
-          Write-Host "=========================================="
+          Expand-Archive -Path $qtZip -DestinationPath $qtExtract -Force
 
           $qtConfig = Get-ChildItem `
             -Path $qtExtract `
@@ -68,63 +138,41 @@ jobs:
             Select-Object -First 1
 
           if (-not $qtConfig) {
-            Write-Host ""
             Write-Host "Qt5Config.cmake não encontrado."
-            Write-Host "Estrutura do pacote:"
-            
-            Get-ChildItem `
-              -Path $qtExtract `
-              -Recurse `
-              -Depth 5 |
-              Select-Object FullName
-
+            Get-ChildItem $qtExtract -Recurse -Depth 6 | Select-Object FullName
             throw "Qt5Config.cmake não foi localizado no pacote Qt5."
           }
 
-          Write-Host "Qt5Config.cmake encontrado:"
-          Write-Host $qtConfig.FullName
-
-          #
-          # Exemplo esperado:
-          #
-          # .../lib/cmake/Qt5/Qt5Config.cmake
-          #
-          # Então o prefixo Qt será:
-          #
-          # .../
-          #
-
           $qtCmakeDir = $qtConfig.Directory.FullName
-          $qtCmakeParent = Split-Path $qtCmakeDir -Parent
-          $qtLibDir = Split-Path $qtCmakeParent -Parent
-          $qtPrefix = Split-Path $qtLibDir -Parent
 
-          Write-Host ""
-          Write-Host "=========================================="
-          Write-Host "QT5 DETECTADO"
-          Write-Host "=========================================="
-          Write-Host "Qt5 config : $qtCmakeDir"
-          Write-Host "Qt5 lib    : $qtLibDir"
-          Write-Host "Qt5 prefix : $qtPrefix"
+          $qtPrefixCandidates = @(
+            (Split-Path (Split-Path (Split-Path $qtCmakeDir -Parent) -Parent) -Parent),
+            (Split-Path (Split-Path $qtCmakeDir -Parent) -Parent),
+            (Split-Path $qtCmakeDir -Parent)
+          )
 
-          if (-not (Test-Path (Join-Path $qtPrefix "lib"))) {
-            Write-Host "Aviso: prefixo não possui lib diretamente."
-            Write-Host "Usando diretório pai do Qt5Config.cmake."
+          $qtPrefix = $null
 
-            $qtPrefix = Split-Path $qtLibDir -Parent
+          foreach ($candidate in $qtPrefixCandidates) {
+            if ($candidate -and
+                (Test-Path (Join-Path $candidate "lib")) -and
+                (Test-Path (Join-Path $candidate "include"))) {
+              $qtPrefix = $candidate
+              break
+            }
           }
 
+          if (-not $qtPrefix) {
+            $qtPrefix = Split-Path $qtCmakeDir -Parent
+          }
+
+          Write-Host "Qt5Config.cmake: $($qtConfig.FullName)"
+          Write-Host "QT_PREFIX: $qtPrefix"
+
           "QT_PREFIX=$qtPrefix" |
-            Out-File `
-              -FilePath $env:GITHUB_ENV `
-              -Append `
-              -Encoding utf8
+            Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
-          Write-Host ""
-          Write-Host "QT_PREFIX configurado como:"
-          Write-Host "$qtPrefix"
-
-      - name: Locate Visual Studio tools
+      - name: Locate Visual Studio x64 tools
         shell: pwsh
         run: |
           $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
@@ -143,58 +191,60 @@ jobs:
             throw "Visual Studio com ferramentas C++ não encontrado."
           }
 
-          $dumpbin = Get-ChildItem "$vsPath\VC\Tools\MSVC" -Filter dumpbin.exe -Recurse |
+          $dumpbin = Get-ChildItem `
+            "$vsPath\VC\Tools\MSVC" `
+            -Filter "dumpbin.exe" `
+            -Recurse `
+            -ErrorAction SilentlyContinue |
+            Where-Object { $_.FullName -match "\\HostX64\\x64\\dumpbin\.exe$" } |
             Select-Object -First 1
 
-          $libexe = Get-ChildItem "$vsPath\VC\Tools\MSVC" -Filter lib.exe -Recurse |
+          $libexe = Get-ChildItem `
+            "$vsPath\VC\Tools\MSVC" `
+            -Filter "lib.exe" `
+            -Recurse `
+            -ErrorAction SilentlyContinue |
+            Where-Object { $_.FullName -match "\\HostX64\\x64\\lib\.exe$" } |
             Select-Object -First 1
 
           if (-not $dumpbin) {
-            throw "dumpbin.exe não encontrado."
+            throw "dumpbin.exe x64 não encontrado."
           }
 
           if (-not $libexe) {
-            throw "lib.exe não encontrado."
+            throw "lib.exe x64 não encontrado."
           }
 
-          "DUMPBIN=$($dumpbin.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append
-          "LIBEXE=$($libexe.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append
-
           Write-Host "dumpbin: $($dumpbin.FullName)"
-          Write-Host "lib.exe: $($libexe.FullName)"
+          Write-Host "lib.exe : $($libexe.FullName)"
+
+          "DUMPBIN=$($dumpbin.FullName)" |
+            Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+          "LIBEXE=$($libexe.FullName)" |
+            Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
       - name: Generate OBS import libraries
         shell: pwsh
         run: |
           $obsBin = Join-Path $env:RUNNER_TEMP "obs-import-libs"
 
+          if (Test-Path $obsBin) {
+            Remove-Item $obsBin -Recurse -Force
+          }
+
           New-Item -ItemType Directory -Force -Path $obsBin | Out-Null
 
-          $obsDll = Get-ChildItem $env:OBS_RUNTIME_DIR -Filter "obs.dll" -Recurse |
-            Select-Object -First 1
+          $obsDll = Join-Path $env:OBS_RUNTIME_DIR "obs.dll"
+          $frontendDll = Join-Path $env:OBS_RUNTIME_DIR "obs-frontend-api.dll"
 
-          $frontendDll = Get-ChildItem $env:OBS_RUNTIME_DIR -Filter "obs-frontend-api.dll" -Recurse |
-            Select-Object -First 1
-
-          if (-not $obsDll) {
-            throw "obs.dll não encontrado no runtime do OBS 27.2.4."
+          if (-not (Test-Path $obsDll)) {
+            throw "obs.dll não encontrado em: $obsDll"
           }
 
-          if (-not $frontendDll) {
-            throw "obs-frontend-api.dll não encontrado no runtime do OBS 27.2.4."
+          if (-not (Test-Path $frontendDll)) {
+            throw "obs-frontend-api.dll não encontrado em: $frontendDll"
           }
-
-          Write-Host "obs.dll: $($obsDll.FullName)"
-          Write-Host "obs-frontend-api.dll: $($frontendDll.FullName)"
-
-          $obsDef = Join-Path $obsBin "obs.def"
-          $frontendDef = Join-Path $obsBin "obs-frontend-api.def"
-
-          & $env:DUMPBIN /exports $obsDll.FullName |
-            Out-File -Encoding ascii $obsDef
-
-          & $env:DUMPBIN /exports $frontendDll.FullName |
-            Out-File -Encoding ascii $frontendDef
 
           function Convert-DumpbinToDef {
             param(
@@ -244,25 +294,31 @@ jobs:
             Set-Content -Path $OutputFile -Value $content -Encoding ascii
           }
 
-          $obsDump = & $env:DUMPBIN /exports $obsDll.FullName | Out-String
-          $frontendDump = & $env:DUMPBIN /exports $frontendDll.FullName | Out-String
+          $obsDump = & $env:DUMPBIN /exports $obsDll 2>&1 | Out-String
+          if ($LASTEXITCODE -ne 0) {
+            throw "dumpbin falhou ao analisar obs.dll."
+          }
 
-          Convert-DumpbinToDef `
-            -DumpbinText $obsDump `
-            -DllName "obs.dll" `
-            -OutputFile $obsDef
+          $frontendDump = & $env:DUMPBIN /exports $frontendDll 2>&1 | Out-String
+          if ($LASTEXITCODE -ne 0) {
+            throw "dumpbin falhou ao analisar obs-frontend-api.dll."
+          }
 
-          Convert-DumpbinToDef `
-            -DumpbinText $frontendDump `
-            -DllName "obs-frontend-api.dll" `
-            -OutputFile $frontendDef
+          $obsDef = Join-Path $obsBin "obs.def"
+          $frontendDef = Join-Path $obsBin "obs-frontend-api.def"
 
-          & $env:LIBEXE /DEF:$obsDef /MACHINE:X64 /OUT:(Join-Path $obsBin "obs.lib")
+          Convert-DumpbinToDef -DumpbinText $obsDump -DllName "obs.dll" -OutputFile $obsDef
+          Convert-DumpbinToDef -DumpbinText $frontendDump -DllName "obs-frontend-api.dll" -OutputFile $frontendDef
+
+          $obsLib = Join-Path $obsBin "obs.lib"
+          $frontendLib = Join-Path $obsBin "obs-frontend-api.lib"
+
+          & $env:LIBEXE /DEF:$obsDef /MACHINE:X64 /OUT:$obsLib
           if ($LASTEXITCODE -ne 0) {
             throw "Falha ao gerar obs.lib"
           }
 
-          & $env:LIBEXE /DEF:$frontendDef /MACHINE:X64 /OUT:(Join-Path $obsBin "obs-frontend-api.lib")
+          & $env:LIBEXE /DEF:$frontendDef /MACHINE:X64 /OUT:$frontendLib
           if ($LASTEXITCODE -ne 0) {
             throw "Falha ao gerar obs-frontend-api.lib"
           }
@@ -270,62 +326,102 @@ jobs:
           Write-Host "Bibliotecas geradas:"
           Get-ChildItem $obsBin | Select-Object Name, Length, FullName
 
-          "OBS_IMPORT_DIR=$obsBin" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "OBS_IMPORT_DIR=$obsBin" |
+            Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Verify OBS import libraries
+        shell: pwsh
+        run: |
+          $obsLib = Join-Path $env:OBS_IMPORT_DIR "obs.lib"
+          $frontendLib = Join-Path $env:OBS_IMPORT_DIR "obs-frontend-api.lib"
+
+          if (-not (Test-Path $obsLib)) {
+            throw "obs.lib não foi criada."
+          }
+
+          if (-not (Test-Path $frontendLib)) {
+            throw "obs-frontend-api.lib não foi criada."
+          }
+
+          Get-Item $obsLib | Select-Object FullName, Length
+          Get-Item $frontendLib | Select-Object FullName, Length
 
       - name: Configure CMake
         shell: pwsh
         run: |
-          Write-Host "OBS_SOURCE_DIR=$env:GITHUB_WORKSPACE\obs-source"
-          Write-Host "OBS_BIN_DIR=$env:OBS_IMPORT_DIR"
-          Write-Host "QT_PREFIX=$env:QT_PREFIX"
+          if (Test-Path "build") {
+            Remove-Item "build" -Recurse -Force
+          }
 
-          cmake -S . -B build `
+          cmake `
+            -S . `
+            -B build `
             -G "Visual Studio 17 2022" `
             -A x64 `
             -DCMAKE_PREFIX_PATH="$env:QT_PREFIX" `
             -DOBS_SOURCE_DIR="$env:GITHUB_WORKSPACE\obs-source" `
             -DOBS_BIN_DIR="$env:OBS_IMPORT_DIR"
 
+          if ($LASTEXITCODE -ne 0) {
+            throw "Configuração do CMake falhou."
+          }
+
       - name: Build plugin
         shell: pwsh
         run: |
-          Write-Host "=========================================="
-          Write-Host "VERIFICANDO BIBLIOTECAS OBS"
-          Write-Host "=========================================="
-
           Write-Host "OBS_IMPORT_DIR:"
           Write-Host "$env:OBS_IMPORT_DIR"
 
           Get-ChildItem "$env:OBS_IMPORT_DIR" -Force |
             Select-Object Name, Length, FullName
 
-          Write-Host ""
-          Write-Host "=========================================="
-          Write-Host "LINKER VERBOSE"
-          Write-Host "=========================================="
-
           cmake --build build `
             --config RelWithDebInfo `
             --parallel `
             --verbose
 
+          if ($LASTEXITCODE -ne 0) {
+            throw "Build do plugin falhou."
+          }
+
       - name: Install package
         shell: pwsh
         run: |
+          if (Test-Path "$env:GITHUB_WORKSPACE\package") {
+            Remove-Item "$env:GITHUB_WORKSPACE\package" -Recurse -Force
+          }
+
           cmake --install build `
             --config RelWithDebInfo `
             --prefix "$env:GITHUB_WORKSPACE\package"
 
-      - name: Copy plugin runtime dependencies
-        shell: pwsh
-        run: |
-          $pluginDir = Join-Path "$env:GITHUB_WORKSPACE\package" "obs-plugins\64bit"
+          if ($LASTEXITCODE -ne 0) {
+            throw "cmake --install falhou."
+          }
 
-          New-Item -ItemType Directory -Force -Path $pluginDir | Out-Null
-
-          Write-Host "Arquivos instalados:"
           Get-ChildItem "$env:GITHUB_WORKSPACE\package" -Recurse |
             Select-Object FullName
+
+      - name: Verify plugin package
+        shell: pwsh
+        run: |
+          $plugin = Get-ChildItem `
+            "$env:GITHUB_WORKSPACE\package" `
+            -Filter "diretor-de-culto.dll" `
+            -File `
+            -Recurse `
+            -ErrorAction SilentlyContinue |
+            Select-Object -First 1
+
+          if (-not $plugin) {
+            Get-ChildItem "$env:GITHUB_WORKSPACE\package" -Recurse |
+              Select-Object FullName
+
+            throw "diretor-de-culto.dll não encontrado no pacote final."
+          }
+
+          Write-Host "Plugin encontrado:"
+          Write-Host $plugin.FullName
 
       - name: Package ZIP
         shell: pwsh
@@ -341,7 +437,10 @@ jobs:
             -DestinationPath $zip `
             -Force
 
-          Write-Host "ZIP criado:"
+          if (-not (Test-Path $zip)) {
+            throw "ZIP final não foi criado."
+          }
+
           Get-Item $zip | Select-Object FullName, Length
 
       - name: Upload artifact
