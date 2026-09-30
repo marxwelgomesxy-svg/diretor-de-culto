@@ -820,16 +820,31 @@ QJsonObject DiretorDock::buildGeminiBody(bool includeMedia) const
             buffer.open(QIODevice::WriteOnly);
             candidateFrames_.value(sceneName).save(&buffer, "JPG", 70);
             buffer.close();
-            parts.append(QJsonObject{{QStringLiteral("text"), QStringLiteral("IMAGEM DA CENA: ") + sceneName},
-                                     {QStringLiteral("inline_data"), QJsonObject{{QStringLiteral("mime_type"), QStringLiteral("image/jpeg")},
-                                                                                 {QStringLiteral("data"), QString::fromLatin1(imageBytes.toBase64())}}}});
+            // Gemini Part usa oneof: texto e mídia NÃO podem ficar no mesmo objeto Part.
+            QJsonObject imageLabelPart;
+            imageLabelPart.insert(QStringLiteral("text"), QStringLiteral("IMAGEM DA CENA: ") + sceneName);
+            parts.append(imageLabelPart);
+
+            QJsonObject imageBlob;
+            imageBlob.insert(QStringLiteral("mime_type"), QStringLiteral("image/jpeg"));
+            imageBlob.insert(QStringLiteral("data"), QString::fromLatin1(imageBytes.toBase64()));
+            QJsonObject imagePart;
+            imagePart.insert(QStringLiteral("inline_data"), imageBlob);
+            parts.append(imagePart);
         }
 
         const QByteArray audio = buildWavAudio();
         if (!audio.isEmpty()) {
-            parts.append(QJsonObject{{QStringLiteral("text"), QStringLiteral("ÁUDIO DO PROGRAMA — últimos segundos")},
-                                     {QStringLiteral("inline_data"), QJsonObject{{QStringLiteral("mime_type"), QStringLiteral("audio/wav")},
-                                                                                 {QStringLiteral("data"), QString::fromLatin1(audio.toBase64())}}}});
+            QJsonObject audioLabelPart;
+            audioLabelPart.insert(QStringLiteral("text"), QStringLiteral("ÁUDIO DO PROGRAMA — últimos segundos"));
+            parts.append(audioLabelPart);
+
+            QJsonObject audioBlob;
+            audioBlob.insert(QStringLiteral("mime_type"), QStringLiteral("audio/wav"));
+            audioBlob.insert(QStringLiteral("data"), QString::fromLatin1(audio.toBase64()));
+            QJsonObject audioPart;
+            audioPart.insert(QStringLiteral("inline_data"), audioBlob);
+            parts.append(audioPart);
         }
     }
 
