@@ -28,6 +28,12 @@ class QLineEdit;
 
 class DiretorDock final : public QWidget {
     Q_OBJECT
+
+    // These types must be declared before the Qt slots that use them.
+    // Keeping them inside the class also lets Qt MOC see the complete signatures.
+    enum class Mode { Manual, Assistido, Automatico };
+    enum class RequestKind { None, Test, Analyze };
+
 public:
     explicit DiretorDock(QWidget *parent = nullptr);
     ~DiretorDock() override;
@@ -49,9 +55,6 @@ private slots:
     void startGeminiHttpRequest(RequestKind kind, const QString &url, const QByteArray &body);
 
 private:
-    enum class Mode { Manual, Assistido, Automatico };
-    enum class RequestKind { None, Test, Analyze };
-
     struct Suggestion {
         QString scene;
         int confidence = 0;

@@ -32,6 +32,9 @@
 #include <cstring>
 #include <map>
 #ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #include <windows.h>
 #include <winhttp.h>
 #endif
@@ -1252,7 +1255,9 @@ void DiretorDock::updateProgress()
     }
     const int elapsedTenths = static_cast<int>((secondsSinceAI_ * 10) % (kAIAnalysisEverySeconds * 10));
     progressBar_->setValue(std::clamp(elapsedTenths, 0, kAIAnalysisEverySeconds * 10));
-    const int remaining = std::max(0, kAIAnalysisEverySeconds - static_cast<int>(secondsSinceAI_));
+    const int remaining = (secondsSinceAI_ < kAIAnalysisEverySeconds)
+                              ? (kAIAnalysisEverySeconds - static_cast<int>(secondsSinceAI_))
+                              : 0;
     nextAnalysisLabel_->setText(remaining > 0 ? QStringLiteral("Próxima análise em %1s").arg(remaining)
                                               : QStringLiteral("Analisando câmeras + áudio..."));
 }
