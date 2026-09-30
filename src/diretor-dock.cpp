@@ -16,8 +16,6 @@
 #include <QJsonParseError>
 #include <QLabel>
 #include <QLineEdit>
-#include <QNetworkReply>
-#include <QNetworkRequest>
 #include <QProgressBar>
 #include <QPushButton>
 #include <QRadioButton>
@@ -25,6 +23,7 @@
 #include <QTimer>
 #include <QUrl>
 #include <QUrlQuery>
+#include <QMetaObject>
 #include <QVBoxLayout>
 #include <QFont>
 #include <QPixmap>
@@ -32,6 +31,10 @@
 #include <cmath>
 #include <cstring>
 #include <map>
+#ifdef _WIN32
+#include <windows.h>
+#include <winhttp.h>
+#endif
 
 namespace {
 constexpr int kAnalysisIntervalMs = 1000;
@@ -81,6 +84,92 @@ void appendLE32(QByteArray &out, quint32 value)
     out.append(char((value >> 16) & 0xff));
     out.append(char((value >> 24) & 0xff));
 }
+
+#ifdef _WIN32
+struct WinHttpResult {
+    int status = 0;
+    QString error;
+    QByteArray body;
+};
+
+WinHttpResult postGeminiWinHttp(const QString &url, const QByteArray &body, const QByteArray &apiKey)
+{
+    WinHttpResult result;
+    const std::wstring urlW = url.toStdWString();
+    URL_COMPONENTS parts{};
+    parts.dwStructSize = sizeof(parts);
+    wchar_t host[256]{};
+    wchar_t path[4096]{};
+    parts.lpszHostName = host;
+    parts.dwHostNameLength = static_cast<DWORD>(std::size(host));
+    parts.lpszUrlPath = path;
+    parts.dwUrlPathLength = static_cast<DWORD>(std::size(path));
+    if (!WinHttpCrackUrl(urlW.c_str(), 0, 0, &parts)) {
+        result.error = QStringLiteral("WinHTTP: WinHttpCrackUrl falhou (%1)").arg(GetLastError());
+        return result;
+    }
+    HINTERNET session = WinHttpOpen(L"DiretorDeCulto/5.3", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
+                                     WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
+    if (!session) {
+        result.error = QStringLiteral("WinHTTP: WinHttpOpen falhou (%1)").arg(GetLastError());
+        return result;
+    }
+    WinHttpSetTimeouts(session, 10000, 10000, 30000, 30000);
+    HINTERNET connection = WinHttpConnect(session, host, parts.nPort, 0);
+    if (!connection) {
+        result.error = QStringLiteral("WinHTTP: WinHttpConnect falhou (%1)").arg(GetLastError());
+        WinHttpCloseHandle(session);
+        return result;
+    }
+    const DWORD flags = (parts.nScheme == INTERNET_SCHEME_HTTPS) ? WINHTTP_FLAG_SECURE : 0;
+    HINTERNET request = WinHttpOpenRequest(connection, L"POST", path, nullptr, WINHTTP_NO_REFERER,
+                                           WINHTTP_DEFAULT_ACCEPT_TYPES, flags);
+    if (!request) {
+        result.error = QStringLiteral("WinHTTP: WinHttpOpenRequest falhou (%1)").arg(GetLastError());
+        WinHttpCloseHandle(connection);
+        WinHttpCloseHandle(session);
+        return result;
+    }
+    const std::wstring apiKeyW = QString::fromUtf8(apiKey).toStdWString();
+    const std::wstring headers = L"Content-Type: application/json\r\nAccept: application/json\r\nx-goog-api-key: " + apiKeyW + L"\r\n";
+    const BOOL sent = WinHttpSendRequest(request, headers.c_str(), static_cast<DWORD>(-1L),
+                                         const_cast<char *>(body.constData()), static_cast<DWORD>(body.size()),
+                                         static_cast<DWORD>(body.size()), 0);
+    if (!sent || !WinHttpReceiveResponse(request, nullptr)) {
+        result.error = QStringLiteral("WinHTTP: requisição HTTPS falhou (%1)").arg(GetLastError());
+        WinHttpCloseHandle(request);
+        WinHttpCloseHandle(connection);
+        WinHttpCloseHandle(session);
+        return result;
+    }
+    DWORD status = 0;
+    DWORD statusSize = sizeof(status);
+    if (WinHttpQueryHeaders(request, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
+                            WINHTTP_HEADER_NAME_BY_INDEX, &status, &statusSize, WINHTTP_NO_HEADER_INDEX))
+        result.status = static_cast<int>(status);
+    for (;;) {
+        DWORD available = 0;
+        if (!WinHttpQueryDataAvailable(request, &available)) {
+            result.error = QStringLiteral("WinHTTP: leitura da resposta falhou (%1)").arg(GetLastError());
+            break;
+        }
+        if (available == 0) break;
+        QByteArray chunk;
+        chunk.resize(static_cast<int>(available));
+        DWORD read = 0;
+        if (!WinHttpReadData(request, chunk.data(), available, &read)) {
+            result.error = QStringLiteral("WinHTTP: WinHttpReadData falhou (%1)").arg(GetLastError());
+            break;
+        }
+        chunk.resize(static_cast<int>(read));
+        result.body += chunk;
+    }
+    WinHttpCloseHandle(request);
+    WinHttpCloseHandle(connection);
+    WinHttpCloseHandle(session);
+    return result;
+}
+#endif
 }
 
 DiretorDock::DiretorDock(QWidget *parent) : QWidget(parent)
@@ -244,7 +333,6 @@ DiretorDock::DiretorDock(QWidget *parent) : QWidget(parent)
     summaryLayout->addWidget(mostUsedLabel_, 0, 2);
     root->addWidget(summaryBox);
 
-    network_ = new QNetworkAccessManager(this);
     analysisTimer_ = new QTimer(this);
     progressTimer_ = new QTimer(this);
     captureTimer_ = new QTimer(this);
@@ -300,11 +388,9 @@ DiretorDock::DiretorDock(QWidget *parent) : QWidget(parent)
 DiretorDock::~DiretorDock()
 {
     stopLoop();
-    if (pendingReply_) {
-        pendingReply_->abort();
-        pendingReply_->deleteLater();
-        pendingReply_ = nullptr;
-    }
+    if (networkThread_.joinable())
+        networkThread_.join();
+    networkBusy_.store(false);
 }
 
 QString DiretorDock::apiKey() const
@@ -487,11 +573,6 @@ void DiretorDock::stopLoop()
     if (progressBar_) progressBar_->setValue(0);
     if (nextAnalysisLabel_)
         nextAnalysisLabel_->setText(directorEnabled_ ? QStringLiteral("Aguardando transmissão") : QStringLiteral("Diretor desligado"));
-    if (pendingReply_) {
-        pendingReply_->abort();
-        pendingReply_->deleteLater();
-        pendingReply_ = nullptr;
-    }
     aiBusy_ = false;
     requestKind_ = RequestKind::None;
 }
@@ -779,9 +860,7 @@ void DiretorDock::requestGeminiTest()
         setAIStatus(QStringLiteral("● IA: informe a API Key"), false);
         return;
     }
-    if (pendingReply_)
-        return;
-
+    if (networkBusy_.load()) return;
     QJsonObject body;
     QJsonObject testTextPart;
     testTextPart.insert(QStringLiteral("text"), QStringLiteral("Responda somente OK para confirmar que a API Gemini está acessível."));
@@ -795,22 +874,14 @@ void DiretorDock::requestGeminiTest()
     QJsonObject generation;
     generation.insert(QStringLiteral("maxOutputTokens"), 8);
     body.insert(QStringLiteral("generationConfig"), generation);
-
-    QUrl url(QStringLiteral("https://generativelanguage.googleapis.com/v1beta/models/%1:generateContent").arg(modelName()));
-    QNetworkRequest request(url);
-    request.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/json"));
-    request.setRawHeader("x-goog-api-key", apiKey().toUtf8());
-    request.setRawHeader("Accept", "application/json");
-    pendingReply_ = network_->post(request, QJsonDocument(body).toJson(QJsonDocument::Compact));
-    requestKind_ = RequestKind::Test;
-    connect(pendingReply_, &QNetworkReply::finished, this, &DiretorDock::onAIReply);
-    setAIStatus(QStringLiteral("● IA: testando Gemini..."), false);
+    const QString url = QStringLiteral("https://generativelanguage.googleapis.com/v1beta/models/%1:generateContent").arg(modelName());
+    startGeminiHttpRequest(RequestKind::Test, url, QJsonDocument(body).toJson(QJsonDocument::Compact));
+    setAIStatus(QStringLiteral("● IA: testando Gemini via HTTPS do Windows..."), false);
 }
 
 void DiretorDock::requestGemini()
 {
-    if (!directorEnabled_ || !streamingActive_ || aiBusy_ || pendingReply_)
-        return;
+    if (!directorEnabled_ || !streamingActive_ || aiBusy_ || networkBusy_.load()) return;
     if (apiKey().isEmpty()) {
         setAIStatus(QStringLiteral("● IA: API Key não configurada"), false);
         return;
@@ -822,26 +893,35 @@ void DiretorDock::requestGemini()
             return;
         }
     }
-
     const QJsonObject body = buildGeminiBody(true);
-    QUrl url(QStringLiteral("https://generativelanguage.googleapis.com/v1beta/models/%1:generateContent").arg(modelName()));
-    QNetworkRequest request(url);
-    request.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/json"));
-    request.setRawHeader("x-goog-api-key", apiKey().toUtf8());
-    request.setRawHeader("Accept", "application/json");
-
-    pendingReply_ = network_->post(request, QJsonDocument(body).toJson(QJsonDocument::Compact));
-    requestKind_ = RequestKind::Analyze;
+    const QString url = QStringLiteral("https://generativelanguage.googleapis.com/v1beta/models/%1:generateContent").arg(modelName());
+    startGeminiHttpRequest(RequestKind::Analyze, url, QJsonDocument(body).toJson(QJsonDocument::Compact));
     aiBusy_ = true;
     secondsSinceAI_ = 0;
-    connect(pendingReply_, &QNetworkReply::finished, this, &DiretorDock::onAIReply);
     setAIStatus(QStringLiteral("● IA: analisando câmeras + áudio..."), false);
+}
+
+void DiretorDock::startGeminiHttpRequest(RequestKind kind, const QString &url, const QByteArray &body)
+{
+#ifndef _WIN32
+    setAIStatus(QStringLiteral("● IA: transporte HTTPS do Windows não disponível"), false);
+#else
+    if (networkBusy_.exchange(true)) return;
+    if (networkThread_.joinable()) networkThread_.join();
+    const QByteArray key = apiKey().toUtf8();
+    requestKind_ = kind;
+    networkThread_ = std::thread([this, kind, url, body, key]() {
+        const WinHttpResult result = postGeminiWinHttp(url, body, key);
+        QMetaObject::invokeMethod(this, [this, kind, result]() {
+            handleAIResult(kind, result.status, result.error, result.body);
+        }, Qt::QueuedConnection);
+    });
+#endif
 }
 
 void DiretorDock::analyzeNow()
 {
-    if (!directorEnabled_ || !streamingActive_)
-        return;
+    if (!directorEnabled_ || !streamingActive_) return;
     saveApiSettings();
     captureSceneImages();
     requestGemini();
@@ -853,51 +933,36 @@ void DiretorDock::testAIConnection()
     requestGeminiTest();
 }
 
-void DiretorDock::onAIReply()
+void DiretorDock::handleAIResult(RequestKind kind, int httpStatus, const QString &errorText, const QByteArray &raw)
 {
-    QNetworkReply *reply = qobject_cast<QNetworkReply *>(sender());
-    if (!reply)
-        reply = pendingReply_;
-    if (!reply)
-        return;
-
-    const QByteArray raw = reply->readAll();
-    const QNetworkReply::NetworkError error = reply->error();
-    const RequestKind kind = requestKind_;
-    reply->deleteLater();
-    if (reply == pendingReply_)
-        pendingReply_ = nullptr;
-    requestKind_ = RequestKind::None;
+    networkBusy_.store(false);
     aiBusy_ = false;
-
-    const int httpStatus = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
-    const QString responseText = QString::fromUtf8(raw).left(420).simplified();
-
-    if (error != QNetworkReply::NoError) {
-        QString diagnostic = QStringLiteral("● IA: erro de rede Gemini: %1").arg(reply->errorString());
-        if (httpStatus > 0)
-            diagnostic += QStringLiteral(" | HTTP %1").arg(httpStatus);
-        if (!responseText.isEmpty())
-            diagnostic += QStringLiteral(" | ") + responseText;
+    requestKind_ = RequestKind::None;
+    const QString responseText = QString::fromUtf8(raw).left(700).simplified();
+    if (!errorText.isEmpty()) {
+        QString diagnostic = QStringLiteral("● IA: erro HTTPS Gemini: %1").arg(errorText);
+        if (httpStatus > 0) diagnostic += QStringLiteral(" | HTTP %1").arg(httpStatus);
+        if (!responseText.isEmpty()) diagnostic += QStringLiteral(" | ") + responseText;
         setAIStatus(diagnostic, false);
         return;
     }
-
-    if (httpStatus >= 400) {
+    if (httpStatus >= 400 || httpStatus == 0) {
         QString diagnostic = QStringLiteral("● IA: Gemini HTTP %1").arg(httpStatus);
-        if (!responseText.isEmpty())
-            diagnostic += QStringLiteral(" | ") + responseText;
+        if (!responseText.isEmpty()) diagnostic += QStringLiteral(" | ") + responseText;
         setAIStatus(diagnostic, false);
         return;
     }
-
     QJsonParseError parseError{};
     const QJsonDocument doc = QJsonDocument::fromJson(raw, &parseError);
     if (!doc.isObject()) {
         setAIStatus(QStringLiteral("● IA: resposta inválida do Gemini"), false);
         return;
     }
-
+    if (kind == RequestKind::Test) {
+        aiOnline_ = true;
+        setAIStatus(QStringLiteral("● IA: Gemini conectado — HTTP %1").arg(httpStatus), true);
+        return;
+    }
     const QJsonArray candidates = doc.object().value(QStringLiteral("candidates")).toArray();
     if (candidates.isEmpty()) {
         setAIStatus(QStringLiteral("● IA: Gemini não retornou candidato"), false);
@@ -905,27 +970,14 @@ void DiretorDock::onAIReply()
     }
     const QJsonArray parts = candidates.first().toObject().value(QStringLiteral("content")).toObject().value(QStringLiteral("parts")).toArray();
     QString text;
-    for (const QJsonValue &part : parts) {
-        text += part.toObject().value(QStringLiteral("text")).toString();
-    }
-    if (text.trimmed().isEmpty()) {
-        setAIStatus(QStringLiteral("● IA: resposta sem decisão"), false);
-        return;
-    }
-
-    QJsonParseError innerError{};
-    const QJsonDocument decisionDoc = QJsonDocument::fromJson(text.toUtf8(), &innerError);
+    for (const QJsonValue &part : parts) text += part.toObject().value(QStringLiteral("text")).toString();
+    QJsonParseError decisionError{};
+    const QJsonDocument decisionDoc = QJsonDocument::fromJson(text.toUtf8(), &decisionError);
     if (!decisionDoc.isObject()) {
-        setAIStatus(QStringLiteral("● IA: decisão não veio em JSON"), false);
+        setAIStatus(QStringLiteral("● IA: JSON de decisão inválido"), false);
         return;
     }
-
     aiOnline_ = true;
-    if (kind == RequestKind::Test) {
-        setAIStatus(QStringLiteral("● IA: Gemini conectado • %1").arg(modelName()), true);
-        return;
-    }
-
     processGeminiDecision(decisionDoc.object());
 }
 

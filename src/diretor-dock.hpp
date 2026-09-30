@@ -5,7 +5,7 @@
 #include <QImage>
 #include <QJsonObject>
 #include <QMutex>
-#include <QNetworkAccessManager>
+#include <thread>
 #include <QWidget>
 #include <QTimer>
 #include <QString>
@@ -25,7 +25,6 @@ class QProgressBar;
 class QRadioButton;
 class QButtonGroup;
 class QLineEdit;
-class QNetworkReply;
 
 class DiretorDock final : public QWidget {
     Q_OBJECT
@@ -46,7 +45,8 @@ private slots:
     void testAIConnection();
     void toggleDirector();
     void updateProgress();
-    void onAIReply();
+    void handleAIResult(RequestKind kind, int httpStatus, const QString &errorText, const QByteArray &raw);
+    void startGeminiHttpRequest(RequestKind kind, const QString &url, const QByteArray &body);
 
 private:
     enum class Mode { Manual, Assistido, Automatico };
@@ -122,8 +122,8 @@ private:
     QTimer *analysisTimer_ = nullptr;
     QTimer *progressTimer_ = nullptr;
     QTimer *captureTimer_ = nullptr;
-    QNetworkAccessManager *network_ = nullptr;
-    QNetworkReply *pendingReply_ = nullptr;
+    std::thread networkThread_;
+    std::atomic<bool> networkBusy_{false};
     RequestKind requestKind_ = RequestKind::None;
 
     Mode mode_ = Mode::Assistido;
