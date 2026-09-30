@@ -766,7 +766,6 @@ QJsonObject DiretorDock::buildGeminiBody(bool includeMedia) const
     schema.insert(QStringLiteral("required"), QJsonArray{QStringLiteral("action"), QStringLiteral("scene"), QStringLiteral("confidence"), QStringLiteral("reasons")});
 
     QJsonObject generation;
-    generation.insert(QStringLiteral("temperature"), 0.1);
     generation.insert(QStringLiteral("maxOutputTokens"), 256);
     generation.insert(QStringLiteral("responseMimeType"), QStringLiteral("application/json"));
     generation.insert(QStringLiteral("responseSchema"), schema);
@@ -794,16 +793,14 @@ void DiretorDock::requestGeminiTest()
     testContents.append(testContent);
     body.insert(QStringLiteral("contents"), testContents);
     QJsonObject generation;
-    generation.insert(QStringLiteral("temperature"), 0.0);
     generation.insert(QStringLiteral("maxOutputTokens"), 8);
     body.insert(QStringLiteral("generationConfig"), generation);
 
     QUrl url(QStringLiteral("https://generativelanguage.googleapis.com/v1beta/models/%1:generateContent").arg(modelName()));
-    QUrlQuery query;
-    query.addQueryItem(QStringLiteral("key"), apiKey());
-    url.setQuery(query);
     QNetworkRequest request(url);
     request.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/json"));
+    request.setRawHeader("x-goog-api-key", apiKey().toUtf8());
+    request.setRawHeader("Accept", "application/json");
     pendingReply_ = network_->post(request, QJsonDocument(body).toJson(QJsonDocument::Compact));
     requestKind_ = RequestKind::Test;
     connect(pendingReply_, &QNetworkReply::finished, this, &DiretorDock::onAIReply);
@@ -828,11 +825,10 @@ void DiretorDock::requestGemini()
 
     const QJsonObject body = buildGeminiBody(true);
     QUrl url(QStringLiteral("https://generativelanguage.googleapis.com/v1beta/models/%1:generateContent").arg(modelName()));
-    QUrlQuery query;
-    query.addQueryItem(QStringLiteral("key"), apiKey());
-    url.setQuery(query);
     QNetworkRequest request(url);
     request.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/json"));
+    request.setRawHeader("x-goog-api-key", apiKey().toUtf8());
+    request.setRawHeader("Accept", "application/json");
 
     pendingReply_ = network_->post(request, QJsonDocument(body).toJson(QJsonDocument::Compact));
     requestKind_ = RequestKind::Analyze;
@@ -874,11 +870,24 @@ void DiretorDock::onAIReply()
     requestKind_ = RequestKind::None;
     aiBusy_ = false;
 
+    const int httpStatus = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+    const QString responseText = QString::fromUtf8(raw).left(420).simplified();
+
     if (error != QNetworkReply::NoError) {
-        const QString detail = QString::fromUtf8(raw).left(220).simplified();
-        setAIStatus(QStringLiteral("● IA: erro Gemini (%1)%2")
-                        .arg(reply->errorString())
-                        .arg(detail.isEmpty() ? QString() : QStringLiteral(" — ") + detail), false);
+        QString diagnostic = QStringLiteral("● IA: erro de rede Gemini: %1").arg(reply->errorString());
+        if (httpStatus > 0)
+            diagnostic += QStringLiteral(" | HTTP %1").arg(httpStatus);
+        if (!responseText.isEmpty())
+            diagnostic += QStringLiteral(" | ") + responseText;
+        setAIStatus(diagnostic, false);
+        return;
+    }
+
+    if (httpStatus >= 400) {
+        QString diagnostic = QStringLiteral("● IA: Gemini HTTP %1").arg(httpStatus);
+        if (!responseText.isEmpty())
+            diagnostic += QStringLiteral(" | ") + responseText;
+        setAIStatus(diagnostic, false);
         return;
     }
 
