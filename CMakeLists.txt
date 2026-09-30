@@ -20,7 +20,7 @@ if(MSVC)
     add_compile_options(/utf-8)
 endif()
 
-find_package(Qt5 REQUIRED COMPONENTS Core Gui Widgets Network)
+find_package(Qt5 REQUIRED COMPONENTS Core Gui Widgets)
 
 set(OBS_LIB "${OBS_BIN_DIR}/obs.lib")
 set(OBS_FRONTEND_LIB "${OBS_BIN_DIR}/obs-frontend-api.lib")
@@ -88,11 +88,11 @@ target_link_libraries(diretor-de-culto PRIVATE
     Qt5::Core
     Qt5::Gui
     Qt5::Widgets
-    Qt5::Network
 )
 
 if(MSVC)
     target_compile_definitions(diretor-de-culto PRIVATE _CRT_SECURE_NO_WARNINGS)
+    target_link_libraries(diretor-de-culto PRIVATE Winhttp.lib)
 endif()
 
 set_target_properties(diretor-de-culto PROPERTIES OUTPUT_NAME "diretor-de-culto" PREFIX "")
