@@ -1,5 +1,5 @@
 /*
- * Diretor de Culto V5
+ * Diretor de Culto V7
  * OBS Studio 27.2.4 / Windows x64
  * Native C++/Qt. Gemini API is optional and requires the user's API key.
  */
@@ -72,7 +72,7 @@ static void create_dock()
 
 bool obs_module_load(void)
 {
-    blog(LOG_INFO, "[Diretor de Culto] carregando V5 nativa C++/Qt + Gemini");
+    blog(LOG_INFO, "[Diretor de Culto] carregando V7 nativa C++/Qt + IA opcional / regras predefinidas");
     obs_frontend_add_event_callback(frontend_event, nullptr);
     if (QApplication::instance())
         QMetaObject::invokeMethod(QApplication::instance(), create_dock, Qt::QueuedConnection);
@@ -92,5 +92,5 @@ void obs_module_unload(void)
 
 const char *obs_module_description(void)
 {
-    return "Diretor de Culto V5 - direção assistida por visão e áudio com Gemini API";
+    return "Diretor de Culto V7 - direção assistida por visão e áudio com Gemini API";
 }

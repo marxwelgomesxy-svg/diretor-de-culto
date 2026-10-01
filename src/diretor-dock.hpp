@@ -2,6 +2,7 @@
 
 #include <QByteArray>
 #include <QHash>
+#include <QSet>
 #include <QImage>
 #include <QJsonObject>
 #include <QMutex>
@@ -25,6 +26,10 @@ class QProgressBar;
 class QRadioButton;
 class QButtonGroup;
 class QLineEdit;
+class QComboBox;
+class QSpinBox;
+class QTableWidget;
+class QPushButton;
 
 class DiretorDock final : public QWidget {
     Q_OBJECT
@@ -32,6 +37,7 @@ class DiretorDock final : public QWidget {
     // These types must be declared before the Qt slots that use them.
     // Keeping them inside the class also lets Qt MOC see the complete signatures.
     enum class Mode { Manual, Assistido, Automatico };
+    enum class Engine { IA, Predefinido };
     enum class RequestKind { None, Test, Analyze };
 
 public:
@@ -47,6 +53,11 @@ private slots:
     void cutSuggestion();
     void ignoreSuggestion();
     void modeChanged();
+    void engineChanged();
+    void addPredefinedRule();
+    void removePredefinedRule();
+    void loadDefaultRules();
+    void predefinedRuleCellChanged();
     void analyzeNow();
     void testAIConnection();
     void toggleDirector();
@@ -60,6 +71,7 @@ private:
         int confidence = 0;
         QStringList reasons;
         QString source = QStringLiteral("IA Gemini");
+        int evidenceCount = 0;
     };
 
     QString currentSceneName() const;
@@ -87,6 +99,10 @@ private:
     QString modelName() const;
     void saveApiSettings();
     void processGeminiDecision(const QJsonObject &decision);
+    void evaluatePredefinedRules();
+    void loadPredefinedRules();
+    void savePredefinedRules();
+    QString ruleKey(const QString &trigger, const QString &target, int delay) const;
 
     static void rawVideoCallback(void *param, struct video_data *frame);
     static void rawAudioCallback(void *param, size_t mix_idx, struct audio_data *data);
@@ -96,6 +112,7 @@ private:
     QLabel *statusLabel_ = nullptr;
     QLabel *liveSceneLabel_ = nullptr;
     QLabel *liveBadge_ = nullptr;
+    QLabel *livePreview_ = nullptr;
     QLabel *suggestionSceneLabel_ = nullptr;
     QLabel *suggestionPreview_ = nullptr;
     QLabel *confidenceLabel_ = nullptr;
@@ -119,6 +136,13 @@ private:
     QRadioButton *assistidoRadio_ = nullptr;
     QRadioButton *automaticoRadio_ = nullptr;
     QButtonGroup *modeGroup_ = nullptr;
+    QRadioButton *iaRadio_ = nullptr;
+    QRadioButton *predefRadio_ = nullptr;
+    QButtonGroup *engineGroup_ = nullptr;
+    QTableWidget *rulesTable_ = nullptr;
+    QPushButton *addRuleButton_ = nullptr;
+    QPushButton *removeRuleButton_ = nullptr;
+    QPushButton *defaultRulesButton_ = nullptr;
     QLineEdit *modelEdit_ = nullptr;
     QLineEdit *apiKeyEdit_ = nullptr;
 
@@ -130,6 +154,7 @@ private:
     RequestKind requestKind_ = RequestKind::None;
 
     Mode mode_ = Mode::Assistido;
+    Engine engine_ = Engine::IA;
     bool directorEnabled_ = false;
     bool streamingActive_ = false;
     bool previousStreamingState_ = false;
@@ -145,6 +170,12 @@ private:
     qint64 secondsSinceCut_ = 9999;
     qint64 secondsSinceAnalysis_ = 0;
     qint64 secondsSinceAI_ = 9999;
+    qint64 secondsInCurrentScene_ = 0;
+    qint64 aiCooldownSeconds_ = 0;
+    QString observedScene_;
+    QString lastCutScene_;
+    QVector<QString> recentScenes_;
+    QSet<QString> triggeredRuleKeys_;
 
     std::atomic<float> audioRms_{0.0f};
     std::atomic<float> motionScore_{0.0f};
