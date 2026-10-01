@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(diretor-de-culto VERSION 5.0.0 LANGUAGES CXX)
+project(diretor-de-culto VERSION 7.0.0 LANGUAGES CXX)
 
 set(OBS_SOURCE_DIR "" CACHE PATH "OBS Studio 27.2.4 source directory")
 set(OBS_BIN_DIR "" CACHE PATH "OBS Studio import libraries directory")
