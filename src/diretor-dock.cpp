@@ -891,7 +891,7 @@ QString DiretorDock::buildAIPrompt() const
     prompt += QStringLiteral("TEMPO DESDE O ÚLTIMO CORTE: ") + QString::number(secondsSinceCut_) + QStringLiteral(" s\n");
     prompt += QStringLiteral("ÁUDIO RMS: ") + QString::number(rms, 'f', 3) + QStringLiteral("\n");
     prompt += QStringLiteral("MOVIMENTO DO PROGRAMA: ") + QString::number(motion, 'f', 3) + QStringLiteral("\n");
-    prompt += QStringLiteral("HISTÓRICO RECENTE: ") + recentScenes_.join(QStringLiteral(" -> ")) + QStringLiteral("\n\n");
+    prompt += QStringLiteral("HISTÓRICO RECENTE: ") + QStringList::fromVector(recentScenes_).join(QStringLiteral(" -> ")) + QStringLiteral("\n\n");
     prompt += QStringLiteral("CENAS CANDIDATAS RENDERIZADAS: \n- ") + candidates.join(QStringLiteral("\n- ")) + QStringLiteral("\n\n");
     prompt += QStringLiteral("CENAS DISPONÍVEIS NO OBS: \n- ") + scenes.join(QStringLiteral("\n- ")) + QStringLiteral("\n\n");
     prompt += QStringLiteral("Nas imagens, procure evidências concretas: pastor efetivamente falando; solista efetivamente cantando; regente efetivamente conduzindo; coral cantando; músicos tocando; violão sendo tocado; enquadramento que realmente mostra a ação; mudança real de contexto. Não presuma uma ação apenas porque o nome da cena sugere isso.\n");
